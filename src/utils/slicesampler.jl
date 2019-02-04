@@ -39,14 +39,14 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
   widths[isinf.(widths)] .= 10.0
   widths[LB .== UB] .= 1.0   # WIDTHS is irrelevant when LB == UB, set to 1
   LB_out = @. LB-eps(LB)
-  UB_out = @. UB-eps(UB)
+  UB_out = @. UB+eps(UB)
 
   basewidths = widths
   doprior = !isnothing(logprior)
 
   funccount = 0
   _fake_eval_logpdf(_) = 666.0
-  y = _fake_eval_logpdf(x0)
+  log_Px = _fake_eval_logpdf(x0)
   xx = x0
   samples = zeros(nsampl, D)
 
@@ -54,7 +54,6 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
   burn =  something(burning, div(nsampl,3))
   @show burn
 
-  log_Px = y
   # check things
   @assert  all(UB .>= LB)
        "All upper bounds UB need to be equal or greater than lower bounds LB."
@@ -90,15 +89,16 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
     # Random-permutation axes sweep
     for dd in randperm(D)
       # Fixed dimension, skip
-      LB(dd) == UB(dd) && continue
+      LB[dd] == UB[dd] && continue
+      widthdd = widths[dd]
 
       log_uprime = log(rand()) + log_Px
       x_l, x_r, xprime = ( copy(xx) for _ in 1:3)
 
       # Create a horizontal interval (x_l, x_r) enclosing xx
       rr = rand()
-      x_l[dd] .-= rr*widths[dd]
-      x_r[dd] .+= (1.0 - rr) * widths[dd]
+      x_l[dd] .-= rr*widthdd
+      x_r[dd] .+= (1.0 - rr) * widthdd
 
       # adjust interval to outside bounds for bounded problems
       if isfinite(LB[dd]) || isfinite(UB[dd])
@@ -107,132 +107,90 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
           x_l[dd] .= x_l[dd] + delta
           x_r[dd] .= x_r[dd] + delta
         end
-        if  x_r(dd) > UB_out(dd)
+        if  x_r[dd] > UB_out[dd]
           Vdelta = x_r[dd] - UB_out[dd]
           x_l[dd] = x_l[dd] - delta
           x_r[dd] = x_r[dd] - delta
         end
-        x_l[dd] .= max(x_l[dd],LB_out[dd])
-        x_r[dd] .= min(x_r[dd],UB_out[dd])
+        # x_l[dd] .= max(x_l[dd],LB_out[dd]) # they seem redundant to me
+        # x_r[dd] .= min(x_r[dd],UB_out[dd])
       end
       # Step-out procedure
-  #         if options.StepOut
-  #             steps = 0;
-  #             stepsize = widths(dd);
-  #             while (feval(@logpdfbound, x_l, varargin{:}) > log_uprime)
-  #                 x_l(dd) = x_l(dd) - stepsize;
-  #                 steps = steps + 1;
-  #             end
-  #             while (feval(@logpdfbound, x_r, varargin{:}) > log_uprime)
-  #                 x_r(dd) = x_r(dd) + stepsize;
-  #                 steps = steps + 1;
-  #             end
-  #             if trace > 1 && steps >= 10
-  #                 action = ['step-out dim ' num2str(dd) ' (' num2str(steps) ' steps)'];
-  #                 fprintf(displayFormat,ii-burn,funccount,log_Px,action);
-  #             end
-  #         end
-  #
-  #         % Shrink procedure (inner loop)
-  #         % Propose xprimes and shrink interval until good one found
-  #         shrink = 0;
-  #         while 1
-  #             shrink = shrink + 1;
-  #
-  #             xprime(dd) = rand()*(x_r(dd) - x_l(dd)) + x_l(dd);
-  #             [log_Px,fval,logprior] = feval(@logpdfbound, xprime, varargin{:});
-  #
-  #             if log_Px > log_uprime
-  #                 break % this is the only way to leave the while loop
-  #             else
-  #                 % Shrink in
-  #                 if xprime(dd) > xx(dd)
-  #                     x_r(dd) = xprime(dd);
-  #                 elseif xprime(dd) < xx(dd)
-  #                     x_l(dd) = xprime(dd);
-  #                 else
-  #                     errorstr = ['Shrunk to current position and proposal still not acceptable. ' ...
-  #                         'Current position: ' num2str(xx,' %g') '. ' ...
-  #                         'Log f: (new value) ' num2str(log_Px), ', (target value) ' num2str(log_uprime) '.'];
-  #                     error(errorstr);
-  #                 end
-  #             end
-  #         end
-  #
-  #         % Width adaptation (only during burn-in, might break detailed balance)
-  #         if ii <= burn && options.Adaptive
-  #             delta = UB(dd) - LB(dd);
-  #             if shrink > 3
-  #                 if isfinite(delta)
-  #                     widths(dd) = max(widths(dd)/1.1,eps(delta));
-  #                 else
-  #                     widths(dd) = max(widths(dd)/1.1,eps);
-  #                 end
-  #             elseif shrink < 2
-  #                 widths(dd) = min(widths(dd)*1.2, delta);
-  #             end
-  #         end
-  #
-  #         if trace > 1 && shrink >= 10
-  #             action = ['shrink dim ' num2str(dd) ' (' num2str(shrink) ' steps)'];
-  #             fprintf(displayFormat,ii-burn,funccount,log_Px,action);
-  #         end
-  #
-  #         xx(dd) = xprime(dd);
-  #     end
-  #
-  #     %% Record samples and miscellaneous bookkeeping
-  #
-  #     % Record samples?
-  #     record = ii > burn && mod(ii - burn - 1, thin) == 0;
-  #     if record
-  #         ismpl = 1 + (ii - burn - 1)/thin;
-  #         samples(ismpl,:) = xx;
-  #         if nargout > 1; fvals(ismpl,:) = fval(:); end
-  #         if nargout > 3 && doprior; logpriors(ismpl) = logprior; end
-  #     end
-  #
-  #     % Store summary statistics starting half-way into burn-in
-  #     if ii <= burn && ii > burn/2
-  #         xx_sum = xx_sum + xx;
-  #         xx_sqsum = xx_sqsum + xx.^2;
-  #
-  #         % End of burn-in, update WIDTHS if using adaptive method
-  #         if ii == burn && options.Adaptive
-  #             burnstored = floor(burn/2);
-  #             newwidths = 5*sqrt(xx_sqsum/burnstored - (xx_sum/burnstored).^2);
-  #             newwidths = min(newwidths, UB_out - LB_out);
-  #             if ~isreal(newwidths); newwidths = widths; end
-  #             if isempty(basewidths)
-  #                 widths = newwidths;
-  #             else
-  #                 % Max between new widths and geometric mean with user-supplied
-  #                 % widths (i.e. bias towards keeping larger widths)
-  #                 widths = max(newwidths, sqrt(newwidths.*basewidths));
-  #             end
-  #         end
-  #     end
-  #
-  #     if trace > 2
-  #         if ii <= burn; action = 'burn';
-  #         elseif ~record; action = 'thin';
-  #         else action = 'record';
-  #         end
-  #         fprintf(displayFormat,ii-burn,funccount,log_Px,action);
-  #     end
-  #
-  # end
-  #
-  # if trace > 0
-  #     if thin > 1
-  #         thinmsg = ['\n   and keeping 1 sample every ' num2str(thin) ', '];
-  #     else
-  #         thinmsg = '\n   ';
-  #     end
-  #     fprintf(['\nSampling terminated:\n * %d samples obtained after a burn-in period of %d samples' thinmsg 'for a total of %d function evaluations.'], ...
-  #         N, burn, funccount);
+      if dostepout
+        steps = 0
+        stepsize = widthdd
+        while logpdf(x_l) > log_uprime
+            x_l[dd] .-= stepsize
+            steps += 1
+        end
+        while logpdf(x_r) > log_uprime
+            x_r[dd] .+= stepsize
+            steps += 1
+        end
+        if trace > 1 && steps >= 10
+            action = "step-out dim $dd  ($steps steps)"
+            showinfo(ii-burn,funccount,log_Px,action)
+        end
+      end
+      # Shrink procedure (inner loop)
+      # Propose xprimes and shrink interval until good one found
+      shrink = 0
+      while 1
+        shrink += 1
+        xprime[dd] = rand()*(x_r[dd] - x_l[dd]) + x_l[dd]
+        log_Px = logpdf(xprime)
+        log_Px > log_uprime && break # this is the only way to leave the while loop
+        # Shrink in
+        if xprime[dd] > xx[dd]
+            x_r[dd] = xprime[dd]
+        elseif xprime[dd] < xx[dd]
+            x_l[dd] = xprime[dd]
+        else
+            error("Shrunk to current position and proposal still not acceptable.
+                Current position: $xx  Log f: (new value) $log_Px) , (target value)  $log_uprime" )
+        end
+      end
+      ##  Record samples and miscellaneous bookkeeping
+      # Record samples?
+      record = ii > burn && mod(ii - burn - 1, thin) == 0
+      if record
+          ismpl = 1 + (ii - burn - 1)/thin
+          samples[ismpl,:] = xx
+          # if nargout > 1; fvals(ismpl,:) = fval(:); end
+          # if nargout > 3 && doprior; logpriors(ismpl) = logprior; end
+      end
+      # Store summary statistics starting half-way into burn-in
+      if ii <= burn && ii > burn/2
+        xx_sum +=  xx
+        xx_sqsum +=  xx.^2
+
+        # End of burn-in, update WIDTHS if using adaptive method
+        if ii == burn && insadaptive
+          burnstored = div(burn,2)
+          newwidths = @. 5*sqrt(xx_sqsum/burnstored - (xx_sum/burnstored)^2)
+          broadcast!( (n,u,l) -> min(n, u-l),newwidths,  newwidths,UB_out,LB_out)
+          if !all(isreal.(newwidths))
+             newwidths .= widths end
+          if isnothing(basewidths)
+              widths = newwidths
+          else
+            # Max between new widths and geometric mean with user-supplied
+            # widths (i.e. bias towards keeping larger widths)
+            widths =   broadcast( (n,b) -> max(n, sqrt(n*b)) ,
+                                      newwidths,basewidths)
+          end
+        end
+      end
+      action = if ii <= burn; "burn"
+      elseif !record ; "thin"
+      else "record"; end
+      showinfo(ii-burn,funccount,log_Px,action)
+      thinmsg = thin > 1 ? "\n keeping 1 sample every $thin\n"  : "\n"
   end
-  @show LB , UB , widths
+  println("\nSampling terminated:",
+    "$nsampl samples obtained after a burn-in period of $burn samples",
+    thinmsg,
+    "for a total of $funccount function evaluations"
 end
   #
   # % Sanity checks
@@ -246,9 +204,6 @@ end
 
 slicesamplebnd(identity , [1.,2.] , 10 ; boundaries = ([1.,2.] , [42. , 78  ]) ,
   widths=4.0, burning=2 )
-
-
-
 
 
 
