@@ -1,15 +1,11 @@
 
 
 
-function eval_logpdf()
-  if any( x.< LB .| x.> UB )
-    return -Inf
-  end
-  val_logprior = logprior(x)
-  if  ~isfinite(val_logprior)
-    return -Inf
-  end
-  fval = logpdf(x)
+function _logpdf_check_bound( LB::Vector{Float64}, UB::Vector{Float64},
+        fval::Vector{Float64}, val_logprior::Float64)
+
+  ( any( x.< LB .| x.> UB ) || !isfinite(val_logprior) )  && return -Inf
+
   if any(isnan.(fval))
     @warn "Target density function returned NaN. Trying to continue."
     return -Inf
@@ -17,9 +13,28 @@ function eval_logpdf()
   sum(fval) + val_logprior
 end
 
+# takes left and righ step based on width , then makes sure
+# they are withn the bounds
+function _adjust_bounds(width,LBout,UBout,x_start)
+  l,r = (x_start, x_start)
+  rnd = rand()
+  l -= rnd*width
+  r += (1. - rnd)*width
+  if isfinite(LBout) && l < LBout
+    delta = LBout - l
+    l += delta
+    r += delta
+  end
+  if isfinite(UBout) && r > LBout
+    delta = r - LBout
+    r -= delta
+    l -= delta
+  end
+  max(l,LBout) , min(r,LBout)
+end
 
 function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
-  logprior = nothing ,
+  logprior::Union{Function,Nothing} = nothing ,
   thinning::Integer = 1 ,
   burning::Union{Integer,Nothing} = nothing,
   step_out = false, display=true,
@@ -45,10 +60,14 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
 
   basewidths = widths
   doprior = !isnothing(logprior)
+  if !doprior
+    logprior(x) = Float64(0.0)
+  end
+
+  _logpdf(x) = _logpdf_check_bound(LB,UB,logpdf(x) , logprior(x))
 
   funccount = 0
-  _fake_eval_logpdf(_) = 666.0
-  log_Px = _fake_eval_logpdf(x0)
+  log_Px = _logpdf(x0)
   xx = x0
   samples = zeros(nsampl, D)
 
@@ -91,41 +110,23 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
     # Random-permutation axes sweep
     for dd in randperm(D)
       # Fixed dimension, skip
-      LB[dd] == UB[dd] && continue
+      (LB[dd] == UB[dd]) && continue
       widthdd = widths[dd]
 
       log_uprime = log(rand()) + log_Px
       x_l, x_r, xprime = ( copy(xx) for _ in 1:3)
-
-      # Create a horizontal interval (x_l, x_r) enclosing xx
-      rr = rand()
-      x_l[dd] .-= rr*widthdd
-      x_r[dd] .+= (1.0 - rr) * widthdd
-
       # adjust interval to outside bounds for bounded problems
-      if isfinite(LB[dd]) || isfinite(UB[dd])
-        if x_l[dd] < LB_out[dd]
-          delta = LB_out[dd] - x_l[dd]
-          x_l[dd] .= x_l[dd] + delta
-          x_r[dd] .= x_r[dd] + delta
-        end
-        if  x_r[dd] > UB_out[dd]
-          Vdelta = x_r[dd] - UB_out[dd]
-          x_l[dd] = x_l[dd] - delta
-          x_r[dd] = x_r[dd] - delta
-        end
-        # x_l[dd] .= max(x_l[dd],LB_out[dd]) # they seem redundant to me
-        # x_r[dd] .= min(x_r[dd],UB_out[dd])
-      end
+      x_l[dd] , x_r[dd] = _adjust_bounds(widthdd, LB[dd], UB[dd] ,xx[dd])
+
       # Step-out procedure
       if dostepout
         steps = 0
         stepsize = widthdd
-        while logpdf(x_l) > log_uprime
+        while _logpdf(x_l) > log_uprime
             x_l[dd] .-= stepsize
             steps += 1
         end
-        while logpdf(x_r) > log_uprime
+        while _logpdf(x_r) > log_uprime
             x_r[dd] .+= stepsize
             steps += 1
         end
@@ -140,7 +141,7 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
       while 1
         shrink += 1
         xprime[dd] = rand()*(x_r[dd] - x_l[dd]) + x_l[dd]
-        log_Px = logpdf(xprime)
+        log_Px = _logpdf(xprime)
         log_Px > log_uprime && break # this is the only way to leave the while loop
         # Shrink in
         if xprime[dd] > xx[dd]
@@ -151,6 +152,7 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
             error("Shrunk to current position and proposal still not acceptable.
                 Current position: $xx  Log f: (new value) $log_Px) , (target value)  $log_uprime" )
         end
+        
       end
       ##  Record samples and miscellaneous bookkeeping
       # Record samples?
