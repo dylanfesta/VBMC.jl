@@ -36,47 +36,61 @@ function _adjust_bounds(width,LBout,UBout,x0)
   max(l,LBout) , min(r,RBout)
 end
 
-# auxiliary function to shrink the interval
-
-function _do_shrink!(lgpdf::Function, x::AbstractVector{Float64},
-    xl::AbstractVector{Float64},xr::AbstractVector{Float64})
-  shrink = 0
-  while 1
-    shrink += 1
-    xprime[dd] = rand()*(x_r[dd] - x_l[dd]) + x_l[dd]
-    if  lgpdf(xprime) < logPx
-      return (logPx,shrink)
-    end
-    # Shrink in
-    if xprime[dd] > xx[dd]
-        x_r[dd] = xprime[dd]
-    elseif xprime[dd] < xx[dd]
-        x_l[dd] = xprime[dd]
-    else
-        error("Shrunk to current position and proposal still not acceptable.
-            Current position: $xx  Log f: (new value) $log_Px) , (target value)  $log_uprime" )
-    end
+# auxiliary function to sample point in the slice
+# shrinks the interval and updates the boundaries when outside of the volume
+# the x(prime) vector is updated
+function _do_shrink(nshrink::Integer,
+    targ_lpdf::Float64,
+    lpdf::Function, x::AbstractVector{Float64},
+    xl::Float64,xr::Float64)
+  nshrink += 1
+  x[dd] = rand()*(xr - xl) + xl
+  # the sample is inside , return
+  logPx::Float64 = lpdf(x)
+  if  logPx < targ_lpdf
+    return (logPx,nshrink,xl,xr)
   end
+  # the sample is outside,  shrink the boundaries, repeat
+  if x[dd] > xx[dd]
+      xr = x[dd]
+  elseif x[dd] < xx[dd]
+      xl = x[dd]
+  else # error when xl and xr collapse unto each other
+      error("Shrunk to current position and proposal still not acceptable.")
+      # Current position: $xx  Log f: (new value) $log_Px)
+      # , (target value)  $log_uprime" )
+  end
+  _do_shrink(nshrink,targ_lpdf,lpdf,x,xl,xr)
 end
 
-#=
-shrink = 0
-while 1
-  shrink += 1
-  xprime[dd] = rand()*(x_r[dd] - x_l[dd]) + x_l[dd]
-  log_Px = _logpdf(xprime)
-  (log_Px > log_uprime) && break # accept and leave the while loop
-  # Shrink in
-  if xprime[dd] > xx[dd]
-      x_r[dd] = xprime[dd]
-  elseif xprime[dd] < xx[dd]
-      x_l[dd] = xprime[dd]
+# auxiliary function, updates left and right boundaries in place
+function _do_step_out(targ_lpdf::Float64,lpdf::Function, stepsize::Float64,
+      xl::Vector{Float64},xr::Vector{Float64})
+  steps = 0
+  while lpdf(x_l) > targ_lpdf
+      x_l[dd] .-= stepsize
+      steps += 1
+  end
+  while lpdf(x_r) > targ_lpdf
+      x_r[dd] .+= stepsize
+      steps += 1
+  end
+  return steps
+end
+
+# auxiliary function , with adaptation and during burn-in
+# proposes a new width given the old one
+function _adapt_width(delta_bound::Float64,
+        nshrink::Integer,oldwidth::Float64)
+  if nshrink > 3
+    delta_eps = isfinite(delta_bound) ? eps(delta_bound) : eps()
+    return max(oldwidth/1.1,delta_eps)
+  elseif shrink < 2
+    return min(oldwidth, delta_bound)
   else
-      error("Shrunk to current position and proposal still not acceptable.
-          Current position: $xx  Log f: (new value) $log_Px) , (target value)  $log_uprime" )
+    return oldwidth
   end
 end
-=#
 
 function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
   logprior::Union{Function,Nothing} = nothing ,
@@ -172,58 +186,29 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
       # adjust interval to outside bounds for bounded problems
       x_l[dd] , x_r[dd] = _adjust_bounds(widthdd, LB[dd], UB[dd] ,xx[dd])
 
-      # Step-out procedure
+      # Step-out procedurem updates x_l and x_r in place
       if dostepout
-        steps = 0
-        stepsize = widthdd
-        while _logpdf(x_l) > log_uprime
-            x_l[dd] .-= stepsize
-            steps += 1
-        end
-        while _logpdf(x_r) > log_uprime
-            x_r[dd] .+= stepsize
-            steps += 1
-        end
+        steps = _do_step_out(log_uprime,_logpdf,widthdd,x_l,x_r)
         if steps >= 10
-            action = "step-out dim $dd  ($steps steps)"
-            showinfo(ii-burn,funccount,log_Px,action)
+          action = "step-out dim $dd  ($steps steps)"
+          showinfo(ii-burn,funccount,log_Px,action)
         end
       end
       # Shrink procedure (inner loop)
       # Propose xprime and shrink interval until good one found
-      shrink = 0
-      while 1
-        shrink += 1
-        xprime[dd] = rand()*(x_r[dd] - x_l[dd]) + x_l[dd]
-        log_Px = _logpdf(xprime)
-        (log_Px > log_uprime) && break # accept and leave the while loop
-        # Shrink in
-        if xprime[dd] > xx[dd]
-            x_r[dd] = xprime[dd]
-        elseif xprime[dd] < xx[dd]
-            x_l[dd] = xprime[dd]
-        else
-            error("Shrunk to current position and proposal still not acceptable.
-                Current position: $xx  Log f: (new value) $log_Px) , (target value)  $log_uprime" )
-        end
-      end
-      # Width adaptation (only during burn-in, might break detailed balance)
-      if ii <= burn && isadaptive
-        delta = UB[dd] - LB[dd];
-        if shrink > 3
-          if isfinite(delta)
-            widths[dd] = max(widths[dd]/1.1,eps(delta))
-          else
-            widths[dd] = max(widths[dd]/1.1,eps())
-          end
-        elseif shrink < 2
-          widths[dd] = min(widths[dd]*1.2, delta)
-        end
-      end
+      # also, updates log_Px to current value
+      (log_Px,shrink,xl[dd],xr[dd]) = _do_shrink(0,log_uprime,_logpdf,
+                                              xprime,xl[dd],xr[dd])
       if shrink >= 10
         action = "shrink dim $dd ($shrink steps)"
         showinfo(displayFormat,ii-burn,funccount,log_Px,action)
       end
+      # Width adaptation (only during burn-in, might break detailed balance)
+      if ii <= burn && isadaptive
+        delta = UB[dd] - LB[dd]
+        widths[dd] = _adapt_width(delta,shrink,widthdd)
+      end
+      # all done , update the dimension
       xx[dd] = xprime[dd]
     end
     # all dimensions completed!
