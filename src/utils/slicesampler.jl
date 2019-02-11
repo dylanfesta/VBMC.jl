@@ -1,24 +1,28 @@
+using Formatting # WARNING this is only for testing
 
-
-using Formatting
-
-function _logpdf_check_bound( LB::Vector{Float64}, UB::Vector{Float64},
-        fval::Vector{Float64}, val_logprior::Float64)
+# auxiliary function
+# check results and bounds of the logpdf function
+# the logpdf should return a scalar, and take a vector as input
+function _logpdf_check_bound( LB::Vector{Float64},
+  UB::Vector{Float64}, x::Vector{Float64},
+  fval::Float64, val_logprior::Float64)
   #checking bounds here
-  ( any( x.< LB .| x.> UB ) || !isfinite(val_logprior) )  && return -Inf
-  if any(isnan.(fval))
+  if  any( (x.< LB) .| (x.> UB)  ) || !isfinite(val_logprior)
+     return -Inf
+  elseif isnan(fval)
     @warn "Target density function returned NaN. Trying to continue."
     return -Inf
   end
-  sum(fval) + val_logprior
+  fval + val_logprior
 end
 
-# takes left and righ step based on width , then makes sure
-# they are withn the bounds
-function _adjust_bounds(width,LBout,UBout,x_start)
+# auxiliary function
+# defines new left and righ boundaries
+# over one dimension. Using x0 and width
+function _adjust_bounds(width,LBout,UBout,x0)
   rnd = rand()
-  l = x_start -  rnd*width
-  r = x_start + (1. - rnd)*width
+  l = x0 - rnd*width
+  r = x0 + (1. - rnd)*width
   if isfinite(LBout) && l < LBout
     delta = LBout - l
     l += delta
@@ -31,6 +35,48 @@ function _adjust_bounds(width,LBout,UBout,x_start)
   end
   max(l,LBout) , min(r,RBout)
 end
+
+# auxiliary function to shrink the interval
+
+function _do_shrink!(lgpdf::Function, x::AbstractVector{Float64},
+    xl::AbstractVector{Float64},xr::AbstractVector{Float64})
+  shrink = 0
+  while 1
+    shrink += 1
+    xprime[dd] = rand()*(x_r[dd] - x_l[dd]) + x_l[dd]
+    if  lgpdf(xprime) < logPx
+      return (logPx,shrink)
+    end
+    # Shrink in
+    if xprime[dd] > xx[dd]
+        x_r[dd] = xprime[dd]
+    elseif xprime[dd] < xx[dd]
+        x_l[dd] = xprime[dd]
+    else
+        error("Shrunk to current position and proposal still not acceptable.
+            Current position: $xx  Log f: (new value) $log_Px) , (target value)  $log_uprime" )
+    end
+  end
+end
+
+#=
+shrink = 0
+while 1
+  shrink += 1
+  xprime[dd] = rand()*(x_r[dd] - x_l[dd]) + x_l[dd]
+  log_Px = _logpdf(xprime)
+  (log_Px > log_uprime) && break # accept and leave the while loop
+  # Shrink in
+  if xprime[dd] > xx[dd]
+      x_r[dd] = xprime[dd]
+  elseif xprime[dd] < xx[dd]
+      x_l[dd] = xprime[dd]
+  else
+      error("Shrunk to current position and proposal still not acceptable.
+          Current position: $xx  Log f: (new value) $log_Px) , (target value)  $log_uprime" )
+  end
+end
+=#
 
 function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
   logprior::Union{Function,Nothing} = nothing ,
@@ -62,13 +108,15 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
   basewidths = widths
   doprior = !isnothing(logprior)
 
+  # calls the logpdf function also checking the bounds and counting the calls
   funccount = 0
   function _logpdf(x)
     funccount +=1
+    lpdf = logpdf(x)
     if doprior
-      _logpdf_check_bound(LB,UB,logpdf(x) , logprior(x))
+      _logpdf_check_bound(LB,UB,x,lpdf, logprior(x))
     else
-      _logpdf_check_bound(LB,UB,logpdf(x) , 0.0 )
+      _logpdf_check_bound(LB,UB,x,lpdf, 0.0 )
     end
   end
 
@@ -86,7 +134,7 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
           "The vector WIDTHS need to be all positive real numbers."
   @assert all(x0 .>= LB) && all(x0 .<= UB)
          "The initial starting point X0 is outside the bounds."
-  @assert all(isfinite.(log_Px))
+  @assert isfinite(log_Px)
     "The initial starting point X0 needs to evaluate to a real number (not Inf or NaN)."
   @assert thin > 0
         "The thinning factor OPTIONS.Thin needs to be a positive integer."
@@ -103,8 +151,10 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
   xx_sum = zeros(D)
   xx_sqsum = zeros(D)
 
+  # used for the random interval 0 to log(f(x))
+  exp_distr = Exponential(1.0)
+  # sampling cycle
   for ii in 1:(effN+burn)
-
     # plot info
     if ii == burn+1
       action = "start recording";
@@ -117,7 +167,7 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
       (LB[dd] == UB[dd]) && continue
       # else
       widthdd = widths[dd]
-      log_uprime = log(rand()) + log_Px
+      log_uprime = log_Px - rand(exp_distr)
       x_l, x_r, xprime = ( copy(xx) for _ in 1:3)
       # adjust interval to outside bounds for bounded problems
       x_l[dd] , x_r[dd] = _adjust_bounds(widthdd, LB[dd], UB[dd] ,xx[dd])
@@ -140,13 +190,13 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
         end
       end
       # Shrink procedure (inner loop)
-      # Propose xprimes and shrink interval until good one found
+      # Propose xprime and shrink interval until good one found
       shrink = 0
       while 1
         shrink += 1
         xprime[dd] = rand()*(x_r[dd] - x_l[dd]) + x_l[dd]
         log_Px = _logpdf(xprime)
-        log_Px > log_uprime && break # this is the only way to leave the while loop
+        (log_Px > log_uprime) && break # accept and leave the while loop
         # Shrink in
         if xprime[dd] > xx[dd]
             x_r[dd] = xprime[dd]
@@ -174,7 +224,6 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
         action = "shrink dim $dd ($shrink steps)"
         showinfo(displayFormat,ii-burn,funccount,log_Px,action)
       end
-
       xx[dd] = xprime[dd]
     end
     # all dimensions completed!
@@ -210,13 +259,13 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
       end
     end
     action = if ii <= burn; "burn"
-    elseif !do_record ; "thin"
-    else "record"; end
+      elseif !do_record ; "thin"
+      else "record"; end
     showinfo(ii-burn,funccount,log_Px,action)
     thinmsg = thin > 1 ? "\n keeping 1 sample every $thin\n"  : "\n"
   end
   println("\nSampling terminated:",
     "$nsampl samples obtained after a burn-in period of $burn samples",
     thinmsg,
-    "for a total of $funccount function evaluations"
+    "for a total of $funccount function evaluations")
 end
