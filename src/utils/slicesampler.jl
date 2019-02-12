@@ -1,4 +1,3 @@
-using Formatting # WARNING this is only for testing
 
 # auxiliary function
 # check results and bounds of the logpdf function
@@ -33,34 +32,35 @@ function _adjust_bounds(width,LBout,UBout,x0)
     r -= delta
     l -= delta
   end
-  max(l,LBout) , min(r,RBout)
+  max(l,LBout) , min(r,UBout)
 end
 
 # auxiliary function to sample point in the slice
 # shrinks the interval and updates the boundaries when outside of the volume
 # the x(prime) vector is updated
 function _do_shrink(nshrink::Integer,
+    idx::Integer,
     targ_lpdf::Float64,
-    lpdf::Function, x::AbstractVector{Float64},
+    lpdf::Function, x::AbstractVector{Float64}, xref::Float64,
     xl::Float64,xr::Float64)
   nshrink += 1
-  x[dd] = rand()*(xr - xl) + xl
+  x[idx] = rand()*(xr - xl) + xl
   # the sample is inside , return
   logPx::Float64 = lpdf(x)
   if  logPx < targ_lpdf
     return (logPx,nshrink,xl,xr)
   end
   # the sample is outside,  shrink the boundaries, repeat
-  if x[dd] > xx[dd]
-      xr = x[dd]
-  elseif x[dd] < xx[dd]
-      xl = x[dd]
+  if x[idx] > xref
+      xr = x[idx]
+  elseif x[idx] < xref
+      xl = x[idx]
   else # error when xl and xr collapse unto each other
       error("Shrunk to current position and proposal still not acceptable.")
       # Current position: $xx  Log f: (new value) $log_Px)
       # , (target value)  $log_uprime" )
   end
-  _do_shrink(nshrink,targ_lpdf,lpdf,x,xl,xr)
+  _do_shrink(nshrink,idx,targ_lpdf,lpdf,x, xref, xl,xr)
 end
 
 # auxiliary function, updates left and right boundaries in place
@@ -85,14 +85,15 @@ function _adapt_width(delta_bound::Float64,
   if nshrink > 3
     delta_eps = isfinite(delta_bound) ? eps(delta_bound) : eps()
     return max(oldwidth/1.1,delta_eps)
-  elseif shrink < 2
+  elseif nshrink < 2
     return min(oldwidth, delta_bound)
   else
     return oldwidth
   end
 end
 
-function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
+function slicesamplebnd(logpdf::Function ,
+  x0::AbstractVector{Float64} , nsampl::Integer ;
   logprior::Union{Function,Nothing} = nothing ,
   thinning::Integer = 1 ,
   burning::Union{Integer,Nothing} = nothing,
@@ -100,7 +101,7 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
   widths = nothing ,
   boundaries=(-Inf,Inf),
   dostepout = false ,
-  isadaptive = true ) where XT<:Union{AbstractArray{<:Real},Real}
+  isadaptive = true )
 
   D = length(x0)
   function tovec(x::Real,n)::Vector{Float64}
@@ -124,9 +125,9 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
 
   # calls the logpdf function also checking the bounds and counting the calls
   funccount = 0
-  function _logpdf(x)
+  function _logpdf(x::Vector{Float64})::Float64
     funccount +=1
-    lpdf = logpdf(x)
+    lpdf::Float64 = logpdf(x)
     if doprior
       _logpdf_check_bound(LB,UB,x,lpdf, logprior(x))
     else
@@ -165,7 +166,7 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
   xx_sum = zeros(D)
   xx_sqsum = zeros(D)
 
-  # used for the random interval 0 to log(f(x))
+  # used to sample between 0 and log(f(x))
   exp_distr = Exponential(1.0)
   # sampling cycle
   for ii in 1:(effN+burn)
@@ -197,8 +198,8 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
       # Shrink procedure (inner loop)
       # Propose xprime and shrink interval until good one found
       # also, updates log_Px to current value
-      (log_Px,shrink,xl[dd],xr[dd]) = _do_shrink(0,log_uprime,_logpdf,
-                                              xprime,xl[dd],xr[dd])
+      (log_Px,shrink,x_l[dd],x_r[dd]) = _do_shrink(0,dd,log_uprime,_logpdf,
+                                                      xprime, xx[dd] ,x_l[dd],x_r[dd])
       if shrink >= 10
         action = "shrink dim $dd ($shrink steps)"
         showinfo(displayFormat,ii-burn,funccount,log_Px,action)
@@ -222,9 +223,8 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
     end
     # Store summary statistics starting half-way into burn-in
     if ii <= burn && ii > div(burn,2)
-      xx_sum +=  xx
-      xx_sqsum +=  xx.^2
-
+      xx_sum .+=  xx
+      xx_sqsum .+=  xx.^2
       # End of burn-in, update WIDTHS if using adaptive method
       if ii == burn && isadaptive
         burnstored = div(burn,2)
@@ -238,8 +238,7 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
         else
           # Max between new widths and geometric mean with user-supplied
           # widths (i.e. bias towards keeping larger widths)
-          widths =   broadcast( (n,b) -> max(n, sqrt(n*b)) ,
-                                    newwidths,basewidths)
+          widths =   broadcast( (n,b) -> max(n, sqrt(n*b)) , newwidths, basewidths)
         end
       end
     end
@@ -253,4 +252,5 @@ function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
     "$nsampl samples obtained after a burn-in period of $burn samples",
     thinmsg,
     "for a total of $funccount function evaluations")
+  return samples
 end
