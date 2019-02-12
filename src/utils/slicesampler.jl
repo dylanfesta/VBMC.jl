@@ -1,4 +1,78 @@
 
+
+# auxiliary structure for a more modular approach
+struct SliceSamplerPars
+  x
+  xprime
+  xl
+  xr
+  LB
+  UB
+  LB_out
+  UB_out
+  logpdf_bound
+  logprior
+  # constructor
+  function SliceSamplerPars(logpdf::Function ,
+    x0::AbstractVector{Float64} , nsampl::Integer ;
+    logprior::Union{Function,Nothing} = nothing ,
+    thinning::Integer = 1 ,
+    burning::Union{Integer,Nothing} = nothing,
+    step_out = false, display=true,
+    widths = nothing ,
+    boundaries=(-Inf,Inf),
+    dostepout = false ,
+    isadaptive = true )
+
+  x,xprime,xl,xr = [ copy(x0) for _ in 1:4]
+  LB, UB  = [ tovec(x,D) for x in boundaries]
+  widths = let _w =  something(widths , @. (UB - LB) / 2 )
+     tovec(_w,D) end
+  widths[isinf.(widths)] .= 10.0
+  widths[LB .== UB] .= 1.0   # WIDTHS is irrelevant when LB == UB, set to 1
+  LB_out = @. LB-eps(LB) # this is NaN for UB,LB = Inf
+  UB_out = @. UB+eps(UB)
+
+  basewidths = widths
+  doprior = !isnothing(logprior)
+
+end
+
+#=
+function slicesamplebnd(logpdf::Function ,
+  x0::AbstractVector{Float64} , nsampl::Integer ;
+  logprior::Union{Function,Nothing} = nothing ,
+  thinning::Integer = 1 ,
+  burning::Union{Integer,Nothing} = nothing,
+  step_out = false, display=true,
+  widths = nothing ,
+  boundaries=(-Inf,Inf),
+  dostepout = false ,
+  isadaptive = true )
+=#
+
+function get_logprior(p)
+  if isnothing(logprior)
+    0.0
+  else
+    logprior(p.x)
+  end
+end
+
+
+function __logpdf_check_bound(p::SliceSamplerPars)
+  logpri = get_logprior(p)
+  fval = p.get_logPx(p)
+  if  any( (p.x .< p.LB) .| (p.x .> p.UB)  ) || !isfinite(logpri)
+     return -Inf
+  elseif isnan(fval)
+    @warn "Target density function returned NaN. Trying to continue."
+    return -Inf
+  end
+  fval + logpri
+end
+
+
 # auxiliary function
 # check results and bounds of the logpdf function
 # the logpdf should return a scalar, and take a vector as input
@@ -34,6 +108,10 @@ function _adjust_bounds(width,LBout,UBout,x0)
   end
   max(l,LBout) , min(r,UBout)
 end
+
+
+
+
 
 # auxiliary function to sample point in the slice
 # shrinks the interval and updates the boundaries when outside of the volume
