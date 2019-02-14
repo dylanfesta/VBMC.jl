@@ -3,14 +3,13 @@ using  Revise
 using VBMC ; const VV = VBMC
 using Distributions, Statistics , StatsBase , LinearAlgebra , Random
 
-
 ##
-
 test_logfun(x) = logpdf(MultivariateNormal( diagm(0=>[1.,1.]) ),x )
 
 
-VV.slicesamplebnd( test_logfun , [0. , 0 ], 100  )
+VV.slicesamplebnd( test_logfun , [0. , 0 ], 8  )
 
+##
 #=
 
 function slicesamplebnd(logpdf::Function , x0::XT , nsampl::Integer ;
