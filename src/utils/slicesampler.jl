@@ -159,7 +159,8 @@ function _shrink!(d,slice_logPx::Float64,p::SliceSamplerPars)
   xref = p.xx[d]
   p.xprime[d] = x_try
   new_logPx::Float64 = logpdf_bounds(p.xprime,p)
-  isgood = new_logPx < slice_logPx
+  # if the sample is inside, return
+  isgood = new_logPx > slice_logPx
   # the sample is outside,  shrink the boundaries
   if !isgood
     if x_try > xref
@@ -167,9 +168,17 @@ function _shrink!(d,slice_logPx::Float64,p::SliceSamplerPars)
     elseif x_try < xref
         p.x_l[d] = x_try
     else # error when xl and xr collapse unto each other
-      error("Boundaries shrunk to current position and proposal still not acceptable.")
-      # Current position: $xx  Log f: (new value) $log_Px)
-      # , (target value)  $log_uprime" )
+      @error begin
+        """
+        ERROR :
+        Current main: $(p.xx)
+        Log f proposed:  $new_logPx
+        Log f slice: $(slice_logPx)
+        proposal: $x_try
+        Boundaries shrunk to current position and proposal still not acceptable.
+        """
+      end
+      throw(ErrorException)
     end
   end
   return (new_logPx,isgood)
@@ -215,9 +224,9 @@ end
 
 # Store summary statistics starting half-way into burn-in
 function _update_summary!(ii,p::SliceSamplerPars)
-  if ii <= p.burn && ii > div(p.nburn,2)
-    p.xx_sum .+=  xx
-    p.xx_sqsum .+=  xx.^2
+  if ii <= p.nburn && ii > div(p.nburn,2)
+    p.xx_sum .+=  p.xx
+    p.xx_sqsum .+=  p.xx.^2
   end
   nothing
 end
@@ -229,21 +238,22 @@ function _adapt_width_burn_end!(ii,p::SliceSamplerPars)
     return nothing
   end
   burnstored = div(p.nburn,2)
-  map!(p.widths, zip(p.xx_sqsum,p.xx_sum,
-                   p.UB_out,p.LB_out,p.basewidths)) do (xsq,xs,ub,lb,wbase)
-    neww = min( 5.0sqrt(xsq/burnstored - (xs/burnstored)^2) , ub-lb)
+  for d in eachindex(p.xx)
+    delt = p.UB_out[d] - p.LB_out[d]
+    neww = min( 5.0sqrt( p.xx_sqsum[d]/burnstored - ( p.xx_sum[d] /burnstored)^2) , delt)
     # Max between new widths and geometric mean with user-supplied
     # widths (i.e. bias towards keeping larger widths)
-    max(neww,sqrt(neww*wbase))
+    p.widths[d] = max(neww,sqrt(neww* p.basewidths[d]))
   end
+  nothing
 end
 
 # for printing on screen
 function _showinfo_header()
-  println(" Iteration     f-count       log p(x)                   Action")
+  println("\n\n Iteration     f-count       log p(x)                   Action")
 end
 function _showinfo(all...)
-   _format = " {:4d}         {:8f}    {:12.6e}       {:26s}"
+   _format = " {:4d}         {:8d}    {:12.6e}       {:26s}"
    printfmtln(_format , all...)
 end
 
@@ -265,7 +275,7 @@ function slicesamplebnd(args... ; namedargs... )
     # plot info
     if ii == pp.nburn+1
       action = "start recording"
-      _showinfo(ii-pp.burn,pp.state.nfunccount,
+      _showinfo(ii-pp.nburn,pp.state.nfunccount,
                     pp.state.current_logPx ,action);
     end
     # Slice-sampling step
@@ -284,15 +294,16 @@ function slicesamplebnd(args... ; namedargs... )
         action = "step-out dim $dd  ($steps steps)"
         showinfo(ii-pp.nburn,pp.state.nfunccount,pp.state.current_logPx, action)
       end
-      # shrink procedure,  that also updates xprime
+      # shrink procedure, it also updates xprime
       shrink_done = false
       pp.state.nshrink = 0
+      new_logPx = NaN
       while !shrink_done
         (new_logPx,shrink_done)=_shrink!(dd,log_Pxslice,pp)
       end
-      if pp.state.nshrink >= 10
-        action = "shrink dim $dd ($shrink steps)"
-        showinfo(ii-pp.nburn,pp.state.funccount,pp.state.current_logPx, action)
+      if pp.state.nshrink >= 3
+        action = "shrink dim $dd ($(pp.state.nshrink) steps)"
+        _showinfo(ii-pp.nburn,pp.state.nfunccount,pp.state.current_logPx, action)
       end
       # width adapatation during burn in
       _adapt_width_burning!(ii,dd,pp)
@@ -302,15 +313,35 @@ function slicesamplebnd(args... ; namedargs... )
       for x in (pp.x_l, pp.x_r)
         copy!(x,pp.xx)
       end
-      # TODO  test that I will remvoe later
-      @assert all(pp.xx .== pp.xprime)
-      pp.state.current_logPx = logpdf_bounds(pp.xx,pp)
+      #  tests that I will remvoe later
+      @debug begin
+        @assert all(pp.xx .== pp.xprime)
+        @assert logpdf_bounds(pp.xx,pp) ≈ new_logPx
+      end
+      pp.state.current_logPx =  new_logPx
     end #all dimensions done!
-  end # all ssamples done!
+    # record samples and miscellaneous bookkeeping
+    do_record = (ii > pp.nburn) && (mod(ii - pp.nburn - 1, pp.nthin) == 0)
+    if do_record
+      ismpl = 1 + div(ii-pp.nburn-1,pp.nthin)
+      pp.samples[:,ismpl] = pp.xx
+    end
+    # update summary statistics, that is x_sum and x_sqsum
+    _update_summary!(ii,pp)
+    # End of burn-in, update WIDTHS if using adaptive method
+    _adapt_width_burn_end!(ii,pp)
+    # print some message
+    action = if ii <= pp.nburn; "burn"
+      elseif !do_record ; "thin"
+      else "record"; end
+    _showinfo(ii-pp.nburn,pp.state.nfunccount,
+                    pp.state.current_logPx ,action);
+    end # al ssamples done!
   # exit message and return value
+  thinmsg = pp.nthin > 1 ? "\n keeping 1 sample every $(pp.nthin)\n"  : "\n"
   println("\nSampling terminated:",
     "$nsampl samples obtained after a burn-in period of $(pp.nburn) samples",
-    # thinmsg,
+    thinmsg,
     "for a total of $(pp.state.nfunccount) function evaluations")
   return pp.samples
 end
