@@ -32,13 +32,14 @@ struct SliceSamplerPars
   dostepout::Bool
   isadaptive::Bool
   state::SliceSamplerState
+  verbose::Bool
   # constructor
   function SliceSamplerPars(logpdf::Function ,
     x0::AbstractVector{Float64} , nsampl::Integer ;
     logprior::Union{Function,Nothing} = nothing ,
     thinning::Integer = 1 ,
     burnin::Union{Integer,Nothing} = nothing,
-    step_out = false, display=true,
+    verbose::Bool=false,
     widths::Union{Nothing,AbstractVector{Float64},Float64} = nothing ,
     boundaries=(-Inf,+Inf),
     dostepout = false ,
@@ -100,7 +101,7 @@ struct SliceSamplerPars
               "For adaptive width set burnin > 0.")
   end
   new(samples, xx,xx_sum,xx_sqsum,xprime,xl,xr,LB,UB,LB_out,UB_out,widths,basewidths,
-       nthin, nburn,logpdf,_logprior, dostepout , isadaptive,state)
+       nthin, nburn,logpdf,_logprior, dostepout , isadaptive,state,verbose )
   end
 end
 
@@ -249,16 +250,51 @@ function _adapt_width_burn_end!(ii,p::SliceSamplerPars)
 end
 
 # for printing on screen
-function _showinfo_header()
-  println("\n\n Iteration     f-count       log p(x)                   Action")
+function _showinfo_header(p::SliceSamplerPars)
+   if p.verbose
+     println("\n\n Iteration     f-count       log p(x)                   Action")
+   else
+     nothing
+   end
 end
-function _showinfo(all...)
-   _format = " {:4d}         {:8d}    {:12.6e}       {:26s}"
-   printfmtln(_format , all...)
+function _showinfo(p::SliceSamplerPars,all...)
+   if p.verbose
+     _format = " {:4d}         {:8d}    {:12.6e}       {:26s}"
+     printfmtln(_format , all...)
+   else
+     nothing
+   end
 end
 
+"""
+  SliceSamplerPars(logpdf::Function ,
+      x0::AbstractVector{Float64} , nsampl::Integer ;
+      verbose=false,
+      logprior::Union{Function,Nothing} = nothing ,
+      thinning::Integer = 1 ,
+      burnin::Union{Integer,Nothing} = nothing,
+      widths::Union{Nothing,AbstractVector{Float64},Float64} = nothing ,
+      boundaries=(-Inf,+Inf),
+      dostepout = false ,
+      isadaptive = true)
 
-
+# inputs
+   + `logpdf` - Function that takes a vector x as input and returns a value
+     proportional to the log probabiliy of x
+   + `x0` - starting point. Must have a finite log probability
+   + `nsampl` - number of samples to take
+# optional arguments
+   + `verbose` - whether prints any output
+   + `logprior` - a prior... it is simply summed to the `logpdf`
+   + `thinning` - space between samples that are saved
+   + `burnin` - number of warm up samples
+   + `widths` -  vector of same dimensions as x, represent the interval to consider
+     on each dimension during sampling. Can adapt
+   + `boundaries` - absolute boundaries, `logpdf` is only computed in those limits
+     can be 2 calars  or 2 vectors
+   + `dostepout` - whether to do the step out or not
+   + `isadaptive` - widths change during burn-in
+"""
 function slicesamplebnd(args... ; namedargs... )
   # initialize all variables
   pp = SliceSamplerPars(args... ; namedargs...)
@@ -269,13 +305,13 @@ function slicesamplebnd(args... ; namedargs... )
   # used to sample between 0 and log(f(x))
   exp_distr = Exponential(1.0)
 
-  _showinfo_header()
+  _showinfo_header(pp)
   # sampling cycle
   for ii in 1:(effN+pp.nburn)
     # plot info
     if ii == pp.nburn+1
       action = "start recording"
-      _showinfo(ii-pp.nburn,pp.state.nfunccount,
+      _showinfo(pp,ii-pp.nburn,pp.state.nfunccount,
                     pp.state.current_logPx ,action);
     end
     # Slice-sampling step
@@ -303,7 +339,7 @@ function slicesamplebnd(args... ; namedargs... )
       end
       if pp.state.nshrink >= 3
         action = "shrink dim $dd ($(pp.state.nshrink) steps)"
-        _showinfo(ii-pp.nburn,pp.state.nfunccount,pp.state.current_logPx, action)
+        _showinfo(pp,ii-pp.nburn,pp.state.nfunccount,pp.state.current_logPx, action)
       end
       # width adapatation during burn in
       _adapt_width_burning!(ii,dd,pp)
@@ -334,61 +370,16 @@ function slicesamplebnd(args... ; namedargs... )
     action = if ii <= pp.nburn; "burn"
       elseif !do_record ; "thin"
       else "record"; end
-    _showinfo(ii-pp.nburn,pp.state.nfunccount,
+    _showinfo(pp,ii-pp.nburn,pp.state.nfunccount,
                     pp.state.current_logPx ,action);
     end # al ssamples done!
   # exit message and return value
-  thinmsg = pp.nthin > 1 ? "\n keeping 1 sample every $(pp.nthin)\n"  : "\n"
-  println("\nSampling terminated:",
-    "$nsampl samples obtained after a burn-in period of $(pp.nburn) samples",
-    thinmsg,
-    "for a total of $(pp.state.nfunccount) function evaluations")
-  return pp.samples
+  if pp.verbose
+    thinmsg = pp.nthin > 1 ? "\n keeping 1 sample every $(pp.nthin)\n"  : "\n"
+      println("\nSampling terminated:",
+        "$nsampl samples obtained after a burn-in period of $(pp.nburn) samples",
+        thinmsg,
+        "for a total of $(pp.state.nfunccount) function evaluations")
+   end
+   return pp.samples
 end
-
-
-
-#=
-    # all dimensions completed!
-    # record samples and miscellaneous bookkeeping
-    do_record = (ii > burn) && (mod(ii - burn - 1, thin) == 0)
-    if do_record
-      ismpl = 1 + div(ii-burn-1,thin)
-      samples[ismpl,:] = xx
-        # if nargout > 1; fvals(ismpl,:) = fval(:); end
-        # if nargout > 3 && doprior; logpriors(ismpl) = logprior; end
-    end
-    # Store summary statistics starting half-way into burn-in
-    if ii <= burn && ii > div(burn,2)
-      xx_sum .+=  xx
-      xx_sqsum .+=  xx.^2
-      # End of burn-in, update WIDTHS if using adaptive method
-      if ii == burn && isadaptive
-        burnstored = div(burn,2)
-        newwidths = @. 5*sqrt(xx_sqsum/burnstored - (xx_sum/burnstored)^2)
-        broadcast!( (n,u,l) -> min(n, u-l),newwidths,  newwidths,UB_out,LB_out)
-        if !all(isreal.(newwidths))
-           newwidths .= widths
-        end
-        if isnothing(basewidths)
-            widths = newwidths
-        else
-          # Max between new widths and geometric mean with user-supplied
-          # widths (i.e. bias towards keeping larger widths)
-          widths =   broadcast( (n,b) -> max(n, sqrt(n*b)) , newwidths, basewidths)
-        end
-      end
-    end
-    action = if ii <= burn; "burn"
-      elseif !do_record ; "thin"
-      else "record"; end
-    showinfo(ii-burn,funccount,log_Px,action)
-    thinmsg = thin > 1 ? "\n keeping 1 sample every $thin\n"  : "\n"
-  end
-  println("\nSampling terminated:",
-    "$nsampl samples obtained after a burn-in period of $burn samples",
-    thinmsg,
-    "for a total of $funccount function evaluations")
-  return samples
-end
-=#
