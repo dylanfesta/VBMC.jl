@@ -100,15 +100,13 @@ function _test_Xgrad_size(X::Vector{Float64},
   _test_grad_size(grad,n,meanfun)
 end
 
-
-# compute the mean functions in a series of points, with or without the gradients
-function _get_mfun_grad(X::Vector{Float64},meanfun::GPLMeanFun,
+# auxuliary compute and get gradient functions, for each type of mean function.
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPLMeanFun,
                 grad::T) where T<:Union{Nothing,AbstractVector}
   @error " This function has not been defined for $(typeof(meanfun)) ! "
   return nothing
 end
-
-function _get_mfun_grad(X::Vector{Float64},meanfun::GPZero,
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPZero,
                           grad::T) where T<:Union{Nothing,AbstractVector}
   n=length(X)
   _test_grad_size(grad,n,meanfun)
@@ -117,7 +115,7 @@ function _get_mfun_grad(X::Vector{Float64},meanfun::GPZero,
   end
   zero(X)
 end
-function _get_mfun_grad(X::Vector{Float64},meanfun::GPConst,
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPConst,
                       grad::T) where T<:Union{Nothing,AbstractVector}
   n=length(X)
   _test_grad_size(grad,n,meanfun)
@@ -126,7 +124,7 @@ function _get_mfun_grad(X::Vector{Float64},meanfun::GPConst,
   end
   fill(meanfun.x0,n)
 end
-function _get_mfun_grad(X::Vector{Float64},meanfun::GPLinear,
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPLinear,
                             grad::T) where T<:Union{Nothing,AbstractVector}
   _test_Xgrad_size(grad,X,meanfun)
   x0, w = meanfun.x0 , meanfun.w
@@ -135,7 +133,7 @@ function _get_mfun_grad(X::Vector{Float64},meanfun::GPLinear,
   end
   @. x0 + w*X
 end
-function _get_mfun_grad(X::Vector{Float64},meanfun::GPQuad,
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPQuad,
                   grad::T) where T<:Union{Nothing,AbstractVector}
   _test_Xgrad_size(grad,X,meanfun)
   x0, xm , xmsq = meanfun.x0 , meanfun.xm , meanfun.xmsq
@@ -145,50 +143,54 @@ function _get_mfun_grad(X::Vector{Float64},meanfun::GPQuad,
   end
   @. x0 + xm*X + xmsq*Xsq # broadcast magic!
 end
-function _get_mfun_grad(X::Vector{Float64},meanfun::GPPosQuad,
-                  grad::T) where T<:Union{Nothing,AbstractVector}
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::MF,grad::T) where {
+                    MF<:Union{GPPosQuad,GPNegQuad} , T<:Union{Nothing,AbstractVector} }
   _test_Xgrad_size(grad,X,meanfun)
   x0, xm , omega = meanfun.x0 , meanfun.xm , exp.(meanfun.omega)
+  # sign for gradient (inverted)
+  signfact = MF == GPPosQuad ? (-1.0) : (+1.0)
   z2 = @. ((X-xm)/omega )^2
   if !isnothing(grad)
-    midgrad = @.  (xm-X)/(omega^2)
-    grad .= vcat(1.0, midgrad , -z2)  # no clue why the gradient is this :-(
+    midgrad = @.  (X-Xm)/(omega^2)
+    # first element of grad always +1
+    grad .= signfact .*vcat(signfact, midgrad , z2)
   end
-  @. x0 + 0.5*z2  # broadcast magic!
+  x0 - signfact*0.5*sum(z2) # this is a scalar !?
 end
-function _get_mfun_grad(X::Vector{Float64},meanfun::GPNegQuad,
-                  grad::T) where T<:Union{Nothing,AbstractVector}
-  _test_Xgrad_size(grad,X,meanfun)
-  x0, xm , omega = meanfun.x0 , meanfun.xm , exp.(meanfun.omega)
-  z2 = @. ((X-xm)/omega )^2
-  if !isnothing(grad)
-    midgrad = @.  (X-xm)/(omega^2)
-    grad .= vcat(1.0, midgrad , z2)  # no clue why the gradient is this :-(
-  end
-  @. x0 - 0.5*z2  # broadcast magic!
-end
-function _get_mfun_grad(X::Vector{Float64},
+function gplite_get_mfun_grad(X::Vector{Float64},
                   meanfun::MM, grad::T) where {
-                          T<:Union{Nothing,AbstractVector} , MM<:Union{GPSE,GPNegSE}}
+                          T<:Union{Nothing,AbstractVector} , MF<:Union{GPSE,GPNegSE}}
   _test_Xgrad_size(grad,X,meanfun)
-  x0, hm xm ,  omega = meanfun.x0 , meanfun.h, meanfun.xm , exp.(meanfun.omega)
+  x0, h, xm ,  omega = meanfun.x0 , meanfun.h, meanfun.xm , exp.(meanfun.omega)
   z2 = @. ((X-xm)/omega )^2
-  if isa(MM,GPSE)
-    se = @. h * exp(-0.5*z2)
-  else 
-    se = @. -h * exp(-0.5*z2) # must be a NegSE
-  end
+  signfact = MF == GPSE ? (+1.0) : (-1.0)
+  se = mapreduce(_z-> signfact*h*exp(-0.5*_z), + , z2)
   if !isnothing(grad)
     midgrad = @.  se*(X-xm)/(omega^2)
     bottomgrad = @. z2*se
-    grad .= vcat(1.0, se, midgrad , bottomgrad)  # no clue why the gradient is this :-(
+    grad .= vcat(1.0, se, midgrad , bottomgrad)
   end
-  @. x0 + se  # broadcast magic!
+  x0 + se # yet again, scalar result
+end
+
+# now the part that expressed the properties of each mean function
+struct GPL_FitMeanfun{MF} where MF<:GPLMeanFun
+  meanfun::MF
+  x0::Vector{Float64}
+  LB::Vector{Float64}
+  UB::Vector{Float64}
+  PLB::Vector{Float64}
+  PUB ::Vector{Float64}
 end
 
 
-function booh(x::A  ,y::B  ) where {A<:String , B<:Integer}
-  return true
+function gplite_fit_meanfun(X::Matrix{Float64},y::Vector{Float64}, MFType::DataType)
+  @assert MFType <: GPLMeanFun
+  gplite_fit_meanfun(X,y,Val(MFType))
+end
+
+function gplite_fit_meanfun(X,y,::Val{GPZero})
+
 end
 
 
