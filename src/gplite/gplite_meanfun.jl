@@ -5,15 +5,9 @@ abstract type GPLMeanFun end
 # The mean function structs include the fit parameters
 # The fit function is a different version of the constructor for each
 
-struct GPZero <: GPLMeanFun
-  x0::Vector{Float64}
-  LB::Vector{Float64}
-  UB::Vector{Float64}
-  PLB::Vector{Float64}
-  PUB ::Vector{Float64}
- end
+struct GPZero <: GPLMeanFun  end # no parameters! All empty!
+
 struct GPConst <: GPLMeanFun
-  c::Float64
   m0::Vector{Float64}
   x0::Vector{Float64}
   LB::Vector{Float64}
@@ -40,7 +34,7 @@ struct GPQuad <: GPLMeanFun
   PLB::Vector{Float64}
   PUB ::Vector{Float64}
 end
-struct GPNegQuad <: GPLMeanFun
+struct GPPosQuad <: GPLMeanFun
   m0::Float64
   xm::Vector{Float64}
   omega::Vector{Float64}
@@ -50,7 +44,7 @@ struct GPNegQuad <: GPLMeanFun
   PLB::Vector{Float64}
   PUB ::Vector{Float64}
 end
-struct GPPosQuad <: GPLMeanFun
+struct GPNegQuad <: GPLMeanFun
   m0::Float64
   xm::Vector{Float64}
   omega::Vector{Float64}
@@ -62,9 +56,9 @@ struct GPPosQuad <: GPLMeanFun
 end
 struct GPSE <: GPLMeanFun
   m0::Float64
-  h::Float64
   xm::Vector{Float64}
   omega::Vector{Float64}
+  h::Float64
   x0::Vector{Float64}
   LB::Vector{Float64}
   UB::Vector{Float64}
@@ -73,9 +67,9 @@ struct GPSE <: GPLMeanFun
 end
 struct GPNegSE <: GPLMeanFun
   m0::Float64
-  h::Float64
   xm::Vector{Float64}
   omega::Vector{Float64}
+  h::Float64
   x0::Vector{Float64}
   LB::Vector{Float64}
   UB::Vector{Float64}
@@ -108,44 +102,152 @@ function Base.length(mfun::G) where G<:Union{GPSE,GPNegSE}
     return 2+2length(mfun.xm)
 end
 
-# auxiliary functions to test the sizes of all the elements
-function _test_grad_size(grad::Matrix{Float64},n,meanfun::GPLMeanFun)
-  nh = nhyper(meanfun)
-  dg,ng = size(grad)
-  @assert n == ng "grad matrix columns and input points do not match"
-  @assert dg == nh " number of hyperparamters and grad matrix row do not match "
+# auxiliary functions to test the sizes of the gradient vector
+function _test_grad_size(grad::Nothing, meanfun::GPLMeanFun)
+  return nothing # with no grad the test is always passed
+end
+function _test_grad_size(grad::AbstractVector,meanfun::GPLMeanFun)
+  nh = length(meanfun)
+  ng = length(grad)
+  @assert nh == ng " number of hyperparamters and grad vector size do not match"
   nothing
 end
-function _test_grad_size(grad::Nothing,whatevs...)
-  return nothing
+
+
+# now the fitting of the mean funtions
+
+# auxiliary function that
+# copies parameters across, resuling in a hierarchical structure
+function _copypars!(sourc::GPLMeanFun, x0::V,LB::V,UB::V,
+                PLB::V,PUB::V) where V<:AbstractVector{Real}
+  nn = minimum(length.([ dest.x0, x0 ]))
+  dest.x0[1:nn] = x0[1:nn]
+  dest.LB[1:nn] = LB[1:nn]
+  dest.UB[1:nn] = UB[1:nn]
+  dest.PLB[1:nn] =PLB[1:nn]
+  dest.PUB[1:nn] =PUB[1:nn]
 end
 
-function _test_Xgrad_size(X::Vector{Float64},grad,meanfun::GPLMeanFun)
-  _test_grad_size(grad,length(X),meanfun)
+function GPZero(X::Matrix{Float64},y::Vector{Float64})
+  return GPZero()
 end
-function _test_Xgrad_size(X::Vector{Float64},grad,meanfun::GPLinear)
-  n=length(X)
-  @assert length(meanfun.w) == n  "issue with linear mean function! Not right size!"
-  _test_grad_size(grad,n,meanfun)
+function GPConst(X::Matrix{Float64},y::Vector{Float64})
+  l = 1
+  ymin,ymax = extrema(y)
+  h = ymax-ymin
+  LB = Float64[ ymin - 0.5h ] #defined as 1 vectors, not scalars
+  UB = Float64[ ymax + 0.5h ]
+  PLB,x0,PUB = [Float64[q] for q in  quantile(y,[0.1, 0.5 , 0.9]) ]
+  GPConst(h,x0,LB,UB,PLB,PUB)
 end
-function _test_Xgrad_size(X::Vector{Float64},
-                grad,meanfun::G) where G<:Union{GPQuad,GPPosQuad,GPNegQuad}
-  n=length(X)
-  (a,b,c) = [ getfield(meanfun,nm) for nm in fieldnames(G) ]
-  @assert length(b) == n  "issue with quadratic mean function! Not right size!"
-  @assert length(c) == n  "issue with quadratic mean function! Not right size!"
-  _test_grad_size(grad,n,meanfun)
+function GPLinear(X::Matrix{Float64},y::Vector{Float64})
+  bb=exp(3.0)
+  l = 1+size(X,1)
+  (x0,LB,UB,PLB,PUB) = [ Vector{Float64}(undef,l) for _ in 1:5]
+  _gpaux = GPConst(X,y)
+  _copypars!(_gpaux,x0,LB,UB,PLB,PUB)
+  w = [ xu-xl for (xl,xu) in extrema(X;dims=2) ] # rows are dimensions columns are points
+  delta = w ./ h
+  @. LB[2:l+1] =  -delta *bb
+  @. UB[2:l+1] = delta * bb
+  @. PLB[2:l+1] =  -delta
+  @. PUB[2:l+1] = delta
+  GPLinear(h,w,x0,LB,UB,PLB,PUB)
 end
-function _test_Xgrad_size(X::Vector{Float64},
-                grad,meanfun::G) where G<:Union{GPSE,GPNegSE}
-  n=length(X)
-  (a,b,c,d) = [ getfield(meanfun,nm) for nm in fieldnames(G) ]
-  @assert length(c) == n  "issue with quadratic mean function! Not right size!"
-  @assert length(d) == n  "issue with quadratic mean function! Not right size!"
-  _test_grad_size(grad,n,meanfun)
+function GPQuad(X::Matrix{Float64},y::Vector{Float64})
+  bb=exp(3.0)
+  l = 1+2size(X,1)
+  (x0,LB,UB,PLB,PUB) =  [ Vector{Float64}(undef,l) for _ in 1:5]
+  _gpaux = GPLinear(X,y)
+  _copypars!(_gpaux ,x0,LB,UB,PLB,PUB)
+  w = _gpaux.w
+  h = _gpaux.h
+  delta = w ./ h
+  @. LB[l+2:end] =  -(delta *bb)^2
+  @. UB[l+2:end] = (delta * bb)^2
+  @. PLB[l+2:end] =  -delta^2
+  @. PUB[l+2:end] = delta^2
+  GPQuad(h,w,x0,LB,UB,PLB,PUB)
+end
+function GPPosQuad(X::Matrix{Float64},y::Vector{Float64})
+  bb=exp(3.0)
+  tol=1E-6
+  l = 2+2size(X,1)
+  (x0,LB,UB,PLB,PUB) =  [ Vector{Float64}(undef,l) for _ in 1:5]
+
+  # second part first
+  minx,maxx = let extr =  extrama(X ; dims = 2)[:]
+    (first.(extr) , last.(extr))
+  end
+  w = maxx .- minx
+  LB[2:2l+1] = vcat( (@. minx - 0.5w), (@. log(w) + log(tol)) )
+  UB[2:2l+1] = vcat( (@. maxx + 0.5w), (@. log(w) + log(bb)) )
+  PLB[2:2l+1] = vcat( minx, (@. log(w) + 0.5log(tol)  ) )
+  PUB[2:2l+1] = vcat(maxx, log.(w))
+  x0[2:2l+1] = vcat( maxx , log(std(X;dims=2))[:])
+
+  # now first parameter
+  miny,maxy = extrema(y)
+  h = maxy-miny
+  LB[1] , UB[1] = miny, maxy + h
+  PLB[1] , PUB[1]  = median(y) , maxy
+  x0[1] = quantile(y,0.9)
+  GPPosQuad(xm, w ,h , LB,UB,PLB,PUB)
+end
+function GPNegQuad(X::Matrix{Float64},y::Vector{Float64})
+  l = 2+2size(X,1)
+  (x0,LB,UB,PLB,PUB) =  [ Vector{Float64}(undef,l) for _ in 1:5]
+  _gpaux = GPPosQuad(X,y)
+  _copypars!(_gpaux ,x0,LB,UB,PLB,PUB)
+  w = _gpaux.xm
+  # now first parameter
+  miny,maxy = extrema(y)
+  h = maxy-miny
+  LB[1] , UB[1] = miny - h, maxy
+  PLB[1] , PUB[1]  = miny , median(y)
+  x0[1] = quantile(y,0.1)
+  GPPosQuad(xm, w ,h , LB,UB,PLB,PUB)
+end
+function GPSE(X::Matrix{Float64},y::Vector{Float64})
+  bb=exp(3.0)
+  tol=1E-6
+  l = 2+2size(X,1)
+  (x0,LB,UB,PLB,PUB) =  [ Vector{Float64}(undef,l) for _ in 1:5]
+  _gpaux = GPPosQuad(X,y)
+  h = _gpaux.something
+  w = _gpaux.xm
+  _copypars!(_gpaux ,x0,LB,UB,PLB,PUB)
+  # last parameter
+  LB[2l+2] = log(h) + log(tol)
+  UB[2l+2] =  log(h) + log(bb)
+  PLB[2l+2] = log(h) +0.5log(tol)
+  PUB[2l+2] = log(h)
+  x0[2l+2] =  log(std(y))
+
+  # first parameter is the same as pos quad
+  miny,maxy = extrema(y)
+  h = maxy-miny
+  GPSE(xm, w ,h , LB,UB,PLB,PUB)
+end
+function GPNegSE(X::Matrix{Float64},y::Vector{Float64})
+  bb=exp(3.0)
+  tol=1E-6
+  l = 2+2size(X,1)
+  (x0,LB,UB,PLB,PUB) =  [ Vector{Float64}(undef,l) for _ in 1:5]
+  _gpaux = GPSE(X,y)
+  h = _gpaux.something
+  w = _gpaux.xm
+  _copypars!(_gpaux ,x0,LB,UB,PLB,PUB)
+  # first parameter is the same as neg quad
+  _gpaux2 = GPNegQuad(X,y)
+  LB[1] , UB[1] = _gpaux2.LB[1],  _gpaux2.UB[1]
+  PLB[1] , PUB[1]  = _gpaux2.PLB[1],  _gpaux2.PUB[1]
+  x0[1] = _gpaux2.x0[1]
+  GPNegSE(xm, w ,h , LB,UB,PLB,PUB)
 end
 
-# auxuliary compute and get gradient functions, for each type of mean function.
+# sub-function to compute and get gradient functions, for each type of mean function.
+# (basically all the computation is here)
 function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPLMeanFun,
                 grad::T) where T<:Union{Nothing,AbstractVector}
   @error " This function has not been defined for $(typeof(meanfun)) ! "
@@ -154,7 +256,6 @@ end
 function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPZero,
                           grad::T) where T<:Union{Nothing,AbstractVector}
   n=length(X)
-  _test_grad_size(grad,n,meanfun)
   if !isnothing(grad)
     fill!(grad,NaN)  # should it be 1 anyway?
   end
@@ -163,7 +264,6 @@ end
 function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPConst,
                       grad::T) where T<:Union{Nothing,AbstractVector}
   n=length(X)
-  _test_grad_size(grad,n,meanfun)
   if !isnothing(grad)
     fill!(grad,1.0)
   end
@@ -171,7 +271,6 @@ function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPConst,
 end
 function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPLinear,
                             grad::T) where T<:Union{Nothing,AbstractVector}
-  _test_Xgrad_size(grad,X,meanfun)
   m0, w = meanfun.m0 , meanfun.w
   if !isnothing(grad)
     grad .= vcat(1.0,X)
@@ -180,7 +279,6 @@ function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPLinear,
 end
 function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPQuad,
                   grad::T) where T<:Union{Nothing,AbstractVector}
-  _test_Xgrad_size(grad,X,meanfun)
   m0, xm , xmsq = meanfun.m0 , meanfun.xm , meanfun.xmsq
   Xsq = X.^2
   if !isnothing(grad)
@@ -190,7 +288,6 @@ function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPQuad,
 end
 function gplite_get_mfun_grad(X::Vector{Float64},meanfun::MF,grad::T) where {
                     MF<:Union{GPPosQuad,GPNegQuad} , T<:Union{Nothing,AbstractVector} }
-  _test_Xgrad_size(grad,X,meanfun)
   m0, xm , omega = meanfun.m0 , meanfun.xm , exp.(meanfun.omega)
   # sign for gradient (inverted)
   signfact = MF == GPPosQuad ? (-1.0) : (+1.0)
@@ -205,7 +302,6 @@ end
 function gplite_get_mfun_grad(X::Vector{Float64},
                   meanfun::MM, grad::T) where {
                           T<:Union{Nothing,AbstractVector} , MF<:Union{GPSE,GPNegSE}}
-  _test_Xgrad_size(grad,X,meanfun)
   m0, h, xm ,  omega = meanfun.m0 , meanfun.h, meanfun.xm , exp.(meanfun.omega)
   z2 = @. ((X-xm)/omega )^2
   signfact = MF == GPSE ? (+1.0) : (-1.0)
@@ -219,123 +315,29 @@ function gplite_get_mfun_grad(X::Vector{Float64},
 end
 
 
-# now the fitting of the mean funtions
-
-function _gplite_fitbase(n)
-  filln(x) = fill(x,n)
-  LB, UB = filln(-Inf) , filln(Inf)
-  PLB, PUB =  filln(-Inf) , filln(Inf)
-  x0 = filln(0.0)
-  return (x0,LB,UB,PLB,PUB)
-end
-function _gplite_fitconst(X,y)
-  ymin,ymax = extrema(y)
-  h = ymax-ymin
-  LB1 = ymin - 0.5h
-  UB1 = ymax + 0.5h
-  PLB1,PUB1 = quantile(y,[1.0 , 0.9])
-  x01 = median.(y)
-  return (h,x01,LB1,UB1,PLB1,PUB1)
-end
-
-function _gplite_fitomega(X,bign=exp(3.0),tol=1E-6)
-  minx = minimum(X ; dims = 2)[:]
-  maxx = minimum(X ; dims = 2)[:]
-  w = maxx .- minx
-  LB = vcat( (@. minx - 0.5w), (@. log(w) + log(tol)) )
-  UB = vcat( (@. maxx + 0.5w), (@. log(w) + log(bign)) )
-  PLB = vcat( minx, (@. log(w) + 0.5log(tol)  ) )
-  PUB = vcat(maxx, log.(w))
-  x0 = vcat( maxx , log(std(X;dims=2))[:])
-  (x0,LB,UB,PLB,PUB)
-end
-
-function GPZero(X::Matrix{Float64},y::Vector{Float64})
-  l = 0
-  GPZero(_gplite_fitbase(l)...)
-end
-function GPConst(X::Matrix{Float64},y::Vector{Float64})
-  l = 1
-  (x0,LB,UB,PLB,PUB) = _gplite_fitbase(l)
-  (h,x0[1],LB[1],UB[1],PLB[1],PUB[1]) = _gplite_fitconst(l)
-  GPConst(h,x0,LB,UB,PLB,PUB)
-end
-function GPLinear(X::Matrix{Float64},y::Vector{Float64})
-  bb=exp(3.0)
-  l = 1+size(X,1)
-  (x0,LB,UB,PLB,PUB) = _gplite_fitbase(l)
-  (h,x0[1],LB[1],UB[1],PLB[1],PUB[1]) = _gplite_fitconst(l)
-  w = [ xu-xl for (xl,xu) in extrema(X;dims=2) ] # rows are dimensions columns are points
-  delta = w ./ h
-  @. LB[2:l+1] =  -delta *bb
-  @. UB[2:l+1] = delta * bb
-  @. PLB[2:l+1] =  -delta
-  @. PUB[2:l+1] = delta
-  GPLinear(h,w,x0,LB,UB,PLB,PUB)
-end
-function GPQuad(X::Matrix{Float64},y::Vector{Float64})
-  bb=exp(3.0)
-  tol=1E-6
-  l = 1+2size(X,1)
-  (x0,LB,UB,PLB,PUB) = _gplite_fitbase(l)
-  (h,x0[1],LB[1],UB[1],PLB[1],PUB[1]) = _gplite_fitconst(l)
-  w = [ xu-xl for (xl,xu) in extrema(X;dims=2) ]
-  delta = w ./ h
-  @. LB[2:l+1] =  -delta *bb
-  @. UB[2:l+1] = delta * bb
-  @. PLB[2:l+1] =  -delta
-  @. PUB[2:l+1] = delta
-  @. LB[l+2:end] =  -(delta *bb)^2
-  @. UB[l+2:end] = (delta * bb)^2
-  @. PLB[l+2:end] =  -delta^2
-  @. PUB[l+2:end] = delta^2
-  GPQuad(h,w,x0,LB,UB,PLB,PUB)
-end
-function GPPosQuad(X::Matrix{Float64},y::Vector{Float64})
-  bb=exp(3.0)
-  tol=1E-6
-  l = 2+2size(X,1)
-  (x0,LB,UB,PLB,PUB) = _gplite_fitbase(l)
-  miny,maxy = extrema(y)
-  h = maxy-miny
-  LB[1] , UB[1] = miny, maxy + h
-  PLB[1] , PUB[1]  = median(y) , maxy
-  x0[1] = quantile(y,0.9)
-  # xm and omega
-  for (eq1,eq2) in zip( (x0[3:end], LB[3:end], UB[3:end] , PLB[3:end] , PUB[3:end]) ,
-        _gplite_fitomega(X,bb,tol) )
-    eq1 .= eq2
-  end
-end
-
-
-
-
-
-function gplite_fit_meanfun(X::Matrix{Float64},y::Vector{Float64}, MFType::DataType)
-  @assert MFType <: GPLMeanFun
-  gplite_fit_meanfun(X,y,Val(MFType))
-end
-
-function gplite_fit_meanfun(X,y,::Val{GPZero})
-
-end
-
-
+# this is the main interface
 
 """
-        gplite_meanfun(meanfun::T,X,
-            (grad::Union{Nothing,Matrix{Float64})=nothing ) where T<:GPLMeanFun
+        gplite_meanfun(meanfun::GPLMeanFun, X , grad)
 
-computes the GP mean function evaluated at test points X. If a gradient matrix is
-provided as third argument, it is filled by the gradients for each hyperparameter.
-The gradient matrix should have size `n` ``\times`` `nhyp`. Where n is the length of X
-and `nhyp` is the number of hyperparameters (see function `nhyper`).
+computes the GP mean function evaluated at test points `X`. If `X` is a vector of
+size `d`,  `grad` should either be `nothing` or a vector of size `length(meanfun)`
+(i.e. the number of hyperparamters) .   In case of `n` points, both `X` and `grad`
+should have `n` columns.
 """
-function gplite_meanfun(meanfun::T,X::Vector{Float64},
-            (grad::Union{Nothing,Matrix{Float64})=nothing ) where T<:GPLMeanFun
-
-  dims = length(X)
+function gplite_meanfun(meanfun::GPLMeanFun,X::V,grad::G)
+      where {V<:AbstractVector{Real} , G<: Union{Nothing,AbstractVector{Real}}
   _test_grad_size(grad,meanfun)
-
+  gplite_get_mfun_grad(meanfun,X,grad)
+end
+function gplite_meanfun(meanfun::GPLMeanFun,X::M,grad::G)
+      where {M<:AbstractMatrix{Real} , G<: Union{Nothing,AbstractMatrix{Real}} }
+  n = size(X,2)
+  out= Vector{Float64}(undef,n)
+  for i in 1:n
+    _x = view(X,:,i)
+    _grad = isnothing(grad) ? nothing : view(grad,:,i)
+    out[i] = gplite_get_mfun_grad(meanfun,_x,_grad)
+  end
+  return out
 end
