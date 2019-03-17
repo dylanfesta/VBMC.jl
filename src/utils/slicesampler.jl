@@ -1,5 +1,7 @@
 
 
+abstract type GPLSampler end
+
 # struct to deal with changing parameters
 mutable struct SliceSamplerState
     current_logPx::Float64
@@ -11,7 +13,7 @@ function SliceSamplerState()
 end
 
 # auxiliary structure for a more modular approach
-struct SliceSamplerPars
+struct SliceSamplerPars <: GPLSampler 
   samples::Matrix{Float64}
   xx::Vector{Float64}
   xx_sum::Vector{Float64}
@@ -298,6 +300,10 @@ end
 function slicesamplebnd(args... ; namedargs... )
   # initialize all variables
   pp = SliceSamplerPars(args... ; namedargs...)
+  slicesamplebnd(pp)
+end
+
+function slicesamplebnd(pp::SliceSamplerPars)
   D,nsampl = size(pp.samples)
   # effective number of sampling steps
   effN = nsampl + (nsampl-1)*(pp.nthin-1)
