@@ -5,17 +5,17 @@ abstract type GPLMeanFun end
 # The mean function structs include the fit parameters
 # The fit function is a different version of the constructor for each
 
-struct GPZero <: GPLMeanFun  end # no parameters! All empty!
+struct MeanFZero <: GPLMeanFun  end # no parameters! All empty!
 
-struct GPConst <: GPLMeanFun
-  m0::Vector{Float64}
+struct MeanFConst <: GPLMeanFun
+  m0::Float64
   x0::Vector{Float64}
   LB::Vector{Float64}
   UB::Vector{Float64}
   PLB::Vector{Float64}
   PUB ::Vector{Float64}
 end
-struct GPLinear <: GPLMeanFun
+struct MeanFLinear <: GPLMeanFun
   m0::Float64
   w::Vector{Float64}
   x0::Vector{Float64}
@@ -86,13 +86,13 @@ function Base.length(mfun::GPLMeanFun)
     @error "Base.length not defined for this category of mean function!!!"
     nothing
 end
-function Base.length(mfun::GPZero)
+function Base.length(mfun::MeanFZero)
     return 0
 end
-function Base.length(mfun::GPConst)
+function Base.length(mfun::MeanFConst)
     return 1
 end
-function Base.length(mfun::GPLinear)
+function Base.length(mfun::MeanFLinear)
     return 1+length(mfun.w)
 end
 function Base.length(mfun::G) where G<:Union{GPQuad,GPNegQuad,GPPosQuad,GPSE,GPNegSE}
@@ -128,23 +128,20 @@ function _copypars!(sourc::GPLMeanFun, x0::V,LB::V,UB::V,
   dest.PUB[1:nn] =PUB[1:nn]
 end
 
-function GPZero(X::Matrix{Float64},y::Vector{Float64})
-  return GPZero()
-end
-function GPConst(X::Matrix{Float64},y::Vector{Float64})
+function MeanFConst(y::Vector{Float64})
   l = 1
   ymin,ymax = extrema(y)
-  h = ymax-ymin
-  LB = Float64[ ymin - 0.5h ] #defined as 1 vectors, not scalars
-  UB = Float64[ ymax + 0.5h ]
+  h = ymax-ymin #defined as 1 vectors, not scalars
+  LB = Float64[ymin - 0.5h]
+  UB = Float64[ymax + 0.5h]
   PLB,x0,PUB = [Float64[q] for q in  quantile(y,[0.1, 0.5 , 0.9]) ]
-  GPConst(h,x0,LB,UB,PLB,PUB)
+  MeanFConst(x0[1],x0,LB,UB,PLB,PUB)
 end
-function GPLinear(X::Matrix{Float64},y::Vector{Float64})
+function MeanFLinear(X::Matrix{Float64},y::Vector{Float64})
   bb=exp(3.0)
   l = 1+size(X,1)
   (x0,LB,UB,PLB,PUB) = [ Vector{Float64}(undef,l) for _ in 1:5]
-  _gpaux = GPConst(X,y)
+  _gpaux = MeanFConst(X,y)
   _copypars!(_gpaux,x0,LB,UB,PLB,PUB)
   w = [ xu-xl for (xl,xu) in extrema(X;dims=2) ] # rows are dimensions columns are points
   delta = w ./ h
@@ -152,13 +149,13 @@ function GPLinear(X::Matrix{Float64},y::Vector{Float64})
   @. UB[2:l+1] = delta * bb
   @. PLB[2:l+1] =  -delta
   @. PUB[2:l+1] = delta
-  GPLinear(h,w,x0,LB,UB,PLB,PUB)
+  MeanFLinear(h,w,x0,LB,UB,PLB,PUB)
 end
 function GPQuad(X::Matrix{Float64},y::Vector{Float64})
   bb=exp(3.0)
   l = 1+2size(X,1)
   (x0,LB,UB,PLB,PUB) =  [ Vector{Float64}(undef,l) for _ in 1:5]
-  _gpaux = GPLinear(X,y)
+  _gpaux = MeanFLinear(X,y)
   _copypars!(_gpaux ,x0,LB,UB,PLB,PUB)
   w = _gpaux.w
   h = _gpaux.h
@@ -253,7 +250,7 @@ function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPLMeanFun,
   @error " This function has not been defined for $(typeof(meanfun)) ! "
   return nothing
 end
-function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPZero,
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::MeanFZero,
                           grad::T) where T<:Union{Nothing,AbstractVector}
   n=length(X)
   if !isnothing(grad)
@@ -261,7 +258,7 @@ function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPZero,
   end
   zero(X)
 end
-function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPConst,
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::MeanFConst,
                       grad::T) where T<:Union{Nothing,AbstractVector}
   n=length(X)
   if !isnothing(grad)
@@ -269,7 +266,7 @@ function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPConst,
   end
   fill(meanfun.m0,n)
 end
-function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPLinear,
+function gplite_get_mfun_grad(X::Vector{Float64},meanfun::MeanFLinear,
                             grad::T) where T<:Union{Nothing,AbstractVector}
   m0, w = meanfun.m0 , meanfun.w
   if !isnothing(grad)
@@ -299,22 +296,22 @@ function gplite_get_mfun_grad(X::Vector{Float64},meanfun::MF,grad::T) where {
   end
   m0 - signfact*0.5*sum(z2) # this is a scalar !?
 end
-function gplite_get_mfun_grad(X::Vector{Float64},
-                  meanfun::MM, grad::T) where {
-                          T<:Union{Nothing,AbstractVector} , MF<:Union{GPSE,GPNegSE}}
-  m0, h, xm ,  omega = meanfun.m0 , meanfun.h, meanfun.xm , exp.(meanfun.omega)
-  z2 = @. ((X-xm)/omega )^2
-  signfact = MF == GPSE ? (+1.0) : (-1.0)
-  se = mapreduce(_z-> signfact*h*exp(-0.5*_z), + , z2)
-  if !isnothing(grad)
-    midgrad = @.  se*(X-xm)/(omega^2)
-    bottomgrad = @. z2*se
-    grad .= vcat(1.0, se, midgrad , bottomgrad)
-  end
-  m0 + se # yet again, scalar result
-end
-
-
+# function gplite_get_mfun_grad(X::Vector{Float64},
+#                   meanfun::MM, grad::T) where {
+#                           T<:Union{Nothing,AbstractVector} , MF<:Union{GPSE,GPNegSE}}
+#   m0, h, xm ,  omega = meanfun.m0 , meanfun.h, meanfun.xm , exp.(meanfun.omega)
+#   z2 = @. ((X-xm)/omega )^2
+#   signfact = MF == GPSE ? (+1.0) : (-1.0)
+#   se = mapreduce(_z-> signfact*h*exp(-0.5*_z), + , z2)
+#   if !isnothing(grad)
+#     midgrad = @.  se*(X-xm)/(omega^2)
+#     bottomgrad = @. z2*se
+#     grad .= vcat(1.0, se, midgrad , bottomgrad)
+#   end
+#   m0 + se # yet again, scalar result
+# end
+#
+#
 # this is the main interface
 
 """
@@ -325,13 +322,13 @@ size `d`,  `grad` should either be `nothing` or a vector of size `length(meanfun
 (i.e. the number of hyperparamters) .   In case of `n` points, both `X` and `grad`
 should have `n` columns.
 """
-function gplite_meanfun(meanfun::GPLMeanFun,X::V,grad::G)
-      where {V<:AbstractVector{Real} , G<: Union{Nothing,AbstractVector{Real}}
+function gplite_meanfun(meanfun::GPLMeanFun,X::V,grad::G) where
+      {V<:AbstractVector{Real} , G<: Union{Nothing,AbstractVector{Real}} }
   _test_grad_size(grad,meanfun)
   gplite_get_mfun_grad(meanfun,X,grad)
 end
-function gplite_meanfun(meanfun::GPLMeanFun,X::M,grad::G)
-      where {M<:AbstractMatrix{Real} , G<: Union{Nothing,AbstractMatrix{Real}} }
+function gplite_meanfun(meanfun::GPLMeanFun,X::M,grad::G) where
+     {M<:AbstractMatrix{Real} , G<: Union{Nothing,AbstractMatrix{Real}} }
   n = size(X,2)
   out= Vector{Float64}(undef,n)
   for i in 1:n

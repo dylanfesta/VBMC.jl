@@ -1,6 +1,19 @@
+abstract type Sampler end
 
+"""
 
-abstract type GPLSampler end
+    SliceSamplerOptions
+Struct used to specify the parameters of slice sampler before the
+sampling function is defined.
+"""
+struct SliceSamplerOptions
+  n_samples::Integer
+  nthin::Integer
+  nburn::Integer
+  dostepout::Bool
+  isadaptive::Bool
+  verbose::Bool
+end
 
 # struct to deal with changing parameters
 mutable struct SliceSamplerState
@@ -13,7 +26,36 @@ function SliceSamplerState()
 end
 
 # auxiliary structure for a more modular approach
-struct SliceSamplerPars <: GPLSampler 
+"""
+  SliceSampler(logpdf::Function ,
+      x0::AbstractVector{Float64} , nsampl::Integer ;
+      verbose=false,
+      logprior::Union{Function,Nothing} = nothing ,
+      thinning::Integer = 1 ,
+      burnin::Union{Integer,Nothing} = nothing,
+      widths::Union{Nothing,AbstractVector{Float64},Float64} = nothing ,
+      boundaries=(-Inf,+Inf),
+      dostepout = false ,
+      isadaptive = true)
+
+# inputs
+   + `logpdf` - Function that takes a vector x as input and returns a value
+     proportional to the log probabiliy of x
+   + `x0` - starting point. Must have a finite log probability
+   + `nsampl` - number of samples to take
+# optional arguments
+   + `verbose` - whether prints any output
+   + `logprior` - a prior... it is simply summed to the `logpdf`
+   + `thinning` - space between samples that are saved
+   + `burnin` - number of warm up samples
+   + `widths` -  vector of same dimensions as x, represent the interval to consider
+     on each dimension during sampling. Can adapt
+   + `boundaries` - absolute boundaries, `logpdf` is only computed in those limits
+     can be 2 calars  or 2 vectors
+   + `dostepout` - whether to do the step out or not
+   + `isadaptive` - widths change during burn-in
+"""
+struct SliceSampler <: Sampler
   samples::Matrix{Float64}
   xx::Vector{Float64}
   xx_sum::Vector{Float64}
@@ -36,7 +78,7 @@ struct SliceSamplerPars <: GPLSampler
   state::SliceSamplerState
   verbose::Bool
   # constructor
-  function SliceSamplerPars(logpdf::Function ,
+  function SliceSampler(logpdf::Function ,
     x0::AbstractVector{Float64} , nsampl::Integer ;
     logprior::Union{Function,Nothing} = nothing ,
     thinning::Integer = 1 ,
@@ -110,7 +152,7 @@ end
 # auxiliary function
 # check results and bounds of the logpdf function
 # the logpdf should return a scalar, and take a vector as input
-function logpdf_bounds(x::AbstractVector{Float64},p::SliceSamplerPars)::Float64
+function logpdf_bounds(x::AbstractVector{Float64},p::SliceSampler)::Float64
   logpri = p.logprior(x)
   fval = p.logpdf(x)
   p.state.nfunccount += 1
@@ -129,7 +171,7 @@ end
 # updating x_l and x_r internally
 # over dimension d. Using p.xx as starting point
 # and taking width as reference
-function _update_bounds!(d::Integer,p::SliceSamplerPars)
+function _update_bounds!(d::Integer,p::SliceSampler)
   x_start = p.xx[d]
   rnd = rand()
   wdd = p.widths[d]
@@ -156,7 +198,7 @@ end
 # auxiliary function to sample point in the slice
 # shrinks the interval and updates the boundaries when outside of the volume
 # the x(prime) vector is updated
-function _shrink!(d,slice_logPx::Float64,p::SliceSamplerPars)
+function _shrink!(d,slice_logPx::Float64,p::SliceSampler)
   p.state.nshrink += 1
   x_try = rand()*(p.x_r[d] - p.x_l[d]) + p.x_l[d]
   xref = p.xx[d]
@@ -188,7 +230,7 @@ function _shrink!(d,slice_logPx::Float64,p::SliceSamplerPars)
 end
 
 # auxiliary function, updates left and right boundaries in place
-function _do_step_out!(d, slice_logPx::Float64 , p::SliceSamplerPars)
+function _do_step_out!(d, slice_logPx::Float64 , p::SliceSampler)
   steps = 0
   stepsize = p.widths[d]
   if p.dostepout
@@ -207,7 +249,7 @@ end
 # auxiliary function
 # performs width adaptation during burnin
 # does nothing for nshrink = 2 or 3
-function _adapt_width_burning!(ii,d,p::SliceSamplerPars)
+function _adapt_width_burning!(ii,d,p::SliceSampler)
   # do nothing without burning conditions
   if (ii > p.nburn) || (! p.isadaptive)
     return nothing
@@ -226,7 +268,7 @@ end
 
 
 # Store summary statistics starting half-way into burn-in
-function _update_summary!(ii,p::SliceSamplerPars)
+function _update_summary!(ii,p::SliceSampler)
   if ii <= p.nburn && ii > div(p.nburn,2)
     p.xx_sum .+=  p.xx
     p.xx_sqsum .+=  p.xx.^2
@@ -236,7 +278,7 @@ end
 
 # auxuliary function, performs width adaptation at the end of the burn-in
 # procedure
-function _adapt_width_burn_end!(ii,p::SliceSamplerPars)
+function _adapt_width_burn_end!(ii,p::SliceSampler)
   if (ii != p.nburn) || (! p.isadaptive)
     return nothing
   end
@@ -252,14 +294,14 @@ function _adapt_width_burn_end!(ii,p::SliceSamplerPars)
 end
 
 # for printing on screen
-function _showinfo_header(p::SliceSamplerPars)
+function _showinfo_header(p::SliceSampler)
    if p.verbose
      println("\n\n Iteration     f-count       log p(x)                   Action")
    else
      nothing
    end
 end
-function _showinfo(p::SliceSamplerPars,all...)
+function _showinfo(p::SliceSampler,all...)
    if p.verbose
      _format = " {:4d}         {:8d}    {:12.6e}       {:26s}"
      printfmtln(_format , all...)
@@ -268,42 +310,13 @@ function _showinfo(p::SliceSamplerPars,all...)
    end
 end
 
-"""
-  SliceSamplerPars(logpdf::Function ,
-      x0::AbstractVector{Float64} , nsampl::Integer ;
-      verbose=false,
-      logprior::Union{Function,Nothing} = nothing ,
-      thinning::Integer = 1 ,
-      burnin::Union{Integer,Nothing} = nothing,
-      widths::Union{Nothing,AbstractVector{Float64},Float64} = nothing ,
-      boundaries=(-Inf,+Inf),
-      dostepout = false ,
-      isadaptive = true)
-
-# inputs
-   + `logpdf` - Function that takes a vector x as input and returns a value
-     proportional to the log probabiliy of x
-   + `x0` - starting point. Must have a finite log probability
-   + `nsampl` - number of samples to take
-# optional arguments
-   + `verbose` - whether prints any output
-   + `logprior` - a prior... it is simply summed to the `logpdf`
-   + `thinning` - space between samples that are saved
-   + `burnin` - number of warm up samples
-   + `widths` -  vector of same dimensions as x, represent the interval to consider
-     on each dimension during sampling. Can adapt
-   + `boundaries` - absolute boundaries, `logpdf` is only computed in those limits
-     can be 2 calars  or 2 vectors
-   + `dostepout` - whether to do the step out or not
-   + `isadaptive` - widths change during burn-in
-"""
 function slicesamplebnd(args... ; namedargs... )
   # initialize all variables
-  pp = SliceSamplerPars(args... ; namedargs...)
+  pp = SliceSampler(args... ; namedargs...)
   slicesamplebnd(pp)
 end
 
-function slicesamplebnd(pp::SliceSamplerPars)
+function slicesamplebnd(pp::SliceSampler)
   D,nsampl = size(pp.samples)
   # effective number of sampling steps
   effN = nsampl + (nsampl-1)*(pp.nthin-1)
