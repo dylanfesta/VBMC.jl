@@ -244,7 +244,7 @@ function GPNegSE(X::Matrix{Float64},y::Vector{Float64})
 end
 
 # sub-function to compute and get gradient functions, for each type of mean function.
-# (basically all the computation is here)
+# (basically all the computation for the mean functions is here)
 function gplite_get_mfun_grad(X::Vector{Float64},meanfun::GPLMeanFun,
                 grad::T) where T<:Union{Nothing,AbstractVector}
   @error " This function has not been defined for $(typeof(meanfun)) ! "
