@@ -317,13 +317,12 @@ end
 """
         gplite_meanfun(meanfun::GPLMeanFun, X , grad)
 
-computes the GP mean function evaluated at test points `X`. If `X` is a vector of
+computes the GP mean function evaluated at test points `X`. `X` is a vector of
 size `d`,  `grad` should either be `nothing` or a vector of size `length(meanfun)`
-(i.e. the number of hyperparamters) .   In case of `n` points, both `X` and `grad`
-should have `n` columns.
+(i.e. the number of hyperparamters).
 """
 function gplite_meanfun(meanfun::GPLMeanFun,X::V,grad::G) where
-      {V<:AbstractVector{Real} , G<: Union{Nothing,AbstractVector{Real}} }
+      {V<:AbstractVector , G<: Union{Nothing,AbstractVector}
   _test_grad_size(grad,meanfun)
   gplite_get_mfun_grad(meanfun,X,grad)
 end

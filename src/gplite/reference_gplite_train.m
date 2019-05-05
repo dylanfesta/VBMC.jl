@@ -1,5 +1,4 @@
 
-```matlab
 function [gp,hyp,output] = gplite_train(hyp0,Ns,X,y,meanfun,hprior,options)
 %GPLITE_TRAIN Train lite Gaussian Process hyperparameters.
 
@@ -87,7 +86,7 @@ height = max(y_prior)-min(y_prior);
 
 
 % Read hyperparameter bounds, if specified; otherwise set defaults
-LB_ell = LB(1:D);   
+LB_ell = LB(1:D);
 idx = isnan(LB_ell);                 LB_ell(idx) = log(width(idx))+log(ToL);
 LB_sf = LB(D+1);        if isnan(LB_sf); LB_sf = log(height)+log(ToL); end
 LB_sn = LB(Ncov+1);     if isnan(LB_sn); LB_sn = log(ToL); end
@@ -97,7 +96,7 @@ LB_mean = LB(Ncov+2:D+2+Nmean);
 idx = isnan(LB_mean);
 LB_mean(idx) = meaninfo.LB(idx);
 
-UB_ell = UB(1:D);   
+UB_ell = UB(1:D);
 idx = isnan(UB_ell);    UB_ell(idx) = log(width(idx)*10);
 UB_sf = UB(D+1);        if isnan(UB_sf); UB_sf = log(height*10); end
 UB_sn = UB(Ncov+1);     if isnan(UB_sn); UB_sn = log(height); end
@@ -131,13 +130,13 @@ PUB = [PUB_ell,PUB_sf,PUB_sn,PUB_mean];
 PLB = min(max(PLB,LB),UB);
 PUB = max(min(PUB,UB),LB);
 
-gptrain_options = optimoptions('fmincon','GradObj','on','Display','off');    
+gptrain_options = optimoptions('fmincon','GradObj','on','Display','off');
 
 %% Hyperparameter optimization
 if Ns > 0
     gptrain_options.TolFun = 0.1;  % Limited optimization
 else
-    gptrain_options.TolFun = 1e-6;        
+    gptrain_options.TolFun = 1e-6;
 end
 
 hyp = zeros(Nhyp,Nopts);
@@ -152,7 +151,7 @@ gpoptimize_fun = @(hyp_) gp_objfun(hyp_(:),gp,hprior,0,0);
 % Compare old probability with new probability, check amount of change
 if ~isempty(LogP) && Ns > 0
     nll = Inf(1,size(hyp0,2));
-    for i = 1:size(hyp0,2); nll(i) = gpoptimize_fun(hyp0(:,i)); end    
+    for i = 1:size(hyp0,2); nll(i) = gpoptimize_fun(hyp0(:,i)); end
     lnw = -nll - LogP(:)';
     w = exp(lnw - max(lnw));
     w = w/sum(w);
@@ -255,10 +254,10 @@ if Ns > 0
                 if size(hyp,2) < Ns_eff
                     hyp = repmat(hyp,[1,ceil(Ns_eff/size(hyp,2))]);
                     hyp = hyp(:,1:Ns_eff);
-                end                
+                end
                 [samples,fvals,exitflag,output] = ...
-                    slicelite(gpsample_fun,hyp',Ns_eff,Widths,LB,UB,sampleopts);                
-            else            
+                    slicelite(gpsample_fun,hyp',Ns_eff,Widths,LB,UB,sampleopts);
+            else
                 sampleopts.Adaptive = true;
                 [samples,fvals,exitflag,output] = ...
                     slicelite(gpsample_fun,hyp_start',Ns_eff,Widths,LB,UB,sampleopts);
@@ -270,7 +269,7 @@ if Ns > 0
             logp_prethin = fvals;
 
         case 'covsample'
-            gpsample_fun = @(hyp_) gp_objfun(hyp_(:),gp,hprior,0,1);            
+            gpsample_fun = @(hyp_) gp_objfun(hyp_(:),gp,hprior,0,1);
             sampleopts.Thin = 1;
             sampleopts.Burnin = Burnin;
             sampleopts.Display = 'off';
@@ -284,9 +283,9 @@ if Ns > 0
 
             samples = ...
                 eissample_lite(gpsample_fun,hyp_start',Ns_eff,W,Widths,LB,UB,sampleopts);
-            hyp_prethin = samples';            
+            hyp_prethin = samples';
 
-        case 'hmc'            
+        case 'hmc'
             gpsample_fun = @(hyp_) gp_objfun(hyp_(:),gp,hprior,0,0);
             sampleopts.display = 0;
             sampleopts.checkgrad = 0;
@@ -298,7 +297,7 @@ if Ns > 0
             sampleopts.widths = Widths;
 
             [samples,fvals,diagn] = ...
-                hmc2(gpsample_fun,hyp_start',sampleopts,@(hyp) gpgrad_fun(hyp,gpsample_fun));            
+                hmc2(gpsample_fun,hyp_start',sampleopts,@(hyp) gpgrad_fun(hyp,gpsample_fun));
             hyp_prethin = samples';
 
         otherwise
@@ -390,7 +389,7 @@ else
     catch
         % Something went wrong, return NaN but try to continue
         nlZ = NaN;
-        dnlZ = NaN(size(hyp));        
+        dnlZ = NaN(size(hyp));
     end
 
 %     if compute_grad
@@ -400,5 +399,3 @@ else
 end
 
 end
-
-```

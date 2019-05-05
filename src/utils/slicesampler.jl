@@ -1,10 +1,9 @@
 abstract type Sampler end
 
 """
-
     SliceSamplerOptions
 Struct used to specify the parameters of slice sampler before the
-sampling function is defined.
+definition of the distribution to sample
 """
 struct SliceSamplerOptions
   n_samples::Integer

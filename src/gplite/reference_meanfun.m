@@ -1,5 +1,4 @@
 
-```matlab
 function [m,dm] = gplite_meanfun(hyp,X,meanfun,y)
 %GPLITE_MEANFUN Mean function for lite Gaussian Process regression.
 %   M = GPLITE_MEANFUN(HYP,X,MEANFUN) computes the GP mean function
@@ -61,7 +60,7 @@ switch meanfun
         Nmean = 1 + D;
         meanfun = 2;
     case {3,'3','quad'}
-        Nmean = 1 + 2*D;        
+        Nmean = 1 + 2*D;
         meanfun = 3;
     case {4,'4','negquad'}
         Nmean = 1 + 2*D;
@@ -111,9 +110,9 @@ if isempty(hyp)
             dm.PUB(2:D+1) = delta;
             if meanfun == 3
                 dm.LB(D+2:2*D+1) = -(delta*Big).^2;
-                dm.UB(D+2:2*D+1) = (delta*Big).^2;                
+                dm.UB(D+2:2*D+1) = (delta*Big).^2;
                 dm.PLB(D+2:2*D+1) = -delta.^2;
-                dm.PUB(D+2:2*D+1) = delta.^2;                
+                dm.PUB(D+2:2*D+1) = delta.^2;
             end
 
         elseif meanfun >= 4 && meanfun <= 7
@@ -144,7 +143,7 @@ if isempty(hyp)
                     dm.UB(1) = max(y) + h;
                     dm.PLB(1) = median(y);
                     dm.PUB(1) = max(y);
-                    dm.x0(1) = quantile1(y,0.9);                    
+                    dm.x0(1) = quantile1(y,0.9);
             end
 
             w = max(X) - min(X);                    % Width
@@ -161,12 +160,12 @@ if isempty(hyp)
             dm.PUB(D+2:2*D+1) = log(w);
             dm.x0(D+2:2*D+1) = log(std(X));
 
-            if meanfun == 6 || meanfun == 7                
+            if meanfun == 6 || meanfun == 7
                 dm.LB(2*D+2) = log(h) + log(ToL);   % h
                 dm.UB(2*D+2) = log(h) + log(Big);
                 dm.PLB(2*D+2) = log(h) + 0.5*log(ToL);
                 dm.PUB(2*D+2) = log(h);
-                dm.x0(2*D+2) = log(std(y));                
+                dm.x0(2*D+2) = log(std(y));
             end
 
         end
@@ -217,10 +216,10 @@ end
 compute_grad = nargout > 1;
 
 if compute_grad     % Allocate space for gradient
-    dm = zeros(N,Nmean);    
+    dm = zeros(N,Nmean);
 end
 
-% Compute mean function    
+% Compute mean function
 switch meanfun
     case 0
         m = zeros(N,1);
@@ -256,18 +255,18 @@ switch meanfun
         if compute_grad
             dm(:,1) = ones(N,1);
             dm(:,2:D+1) = bsxfun(@rdivide,bsxfun(@minus,X,xm), omega.^2);
-            dm(:,D+2:2*D+1) = z2;        
+            dm(:,D+2:2*D+1) = z2;
         end
     case 5
         m0 = hyp(1);
         xm = hyp(1+(1:D))';
         omega = exp(hyp(D+1+(1:D)))';
         z2 = bsxfun(@rdivide,bsxfun(@minus,X,xm),omega).^2;
-        m = m0 + 0.5*sum(z2,2);    
+        m = m0 + 0.5*sum(z2,2);
         if compute_grad
             dm(:,1) = ones(N,1);
             dm(:,2:D+1) = -bsxfun(@rdivide,bsxfun(@minus,X,xm), omega.^2);
-            dm(:,D+2:2*D+1) = -z2;        
+            dm(:,D+2:2*D+1) = -z2;
         end
     case {6,7}
         m0 = hyp(1);
@@ -290,4 +289,3 @@ switch meanfun
 end
 
 end
-```
