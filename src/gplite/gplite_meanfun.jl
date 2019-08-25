@@ -1,12 +1,26 @@
 
-
+"""
+    abstract type GPLMeanFun
+ 
+Eeach mean function belongs to the abstract type GPLMeanFun They all include
+the relevant parameters for their construction, plus upper and lower
+boundaries, in two versions
+"""
 abstract type GPLMeanFun end
 
-# The mean function structs include the fit parameters
-# The fit function is a different version of the constructor for each
 
-struct MeanFZero <: GPLMeanFun  end # no parameters! All empty!
+@doc """
+    struct MeanFZero <: GPLMeanFun
 
+``y \\equiv 0`` , no parameters needed
+"""
+struct MeanFZero <: GPLMeanFun
+end 
+@doc """
+    struct MeanFConst <: GPLMeanFun
+
+``y \\equiv m0`` 
+"""
 struct MeanFConst <: GPLMeanFun
   m0::Float64
   x0::Vector{Float64}
@@ -113,25 +127,31 @@ function _test_grad_size(grad::AbstractVector,meanfun::GPLMeanFun)
   nothing
 end
 
-
 # now the fitting of the mean funtions
 
 # auxiliary function that
 # copies parameters across, resuling in a hierarchical structure
 function _copypars!(sourc::GPLMeanFun, x0::V,LB::V,UB::V,
                 PLB::V,PUB::V) where V<:AbstractVector{Real}
-  nn = minimum(length.([ dest.x0, x0 ]))
-  dest.x0[1:nn] = x0[1:nn]
-  dest.LB[1:nn] = LB[1:nn]
-  dest.UB[1:nn] = UB[1:nn]
-  dest.PLB[1:nn] =PLB[1:nn]
-  dest.PUB[1:nn] =PUB[1:nn]
+  nn = minimum(length.([ sourc.x0, x0 ]))
+  x0[1:nn] = sourc.x0[1:nn]
+  LB[1:nn] = sourc.LB[1:nn]
+  UB[1:nn] = sourc.UB[1:nn]
+  PLB[1:nn] =sourc.PLB[1:nn]
+  PUB[1:nn] =sourc.PUB[1:nn]
+end
+
+# constructors, fit the mean function over data contained in vector y
+
+# added for completeness
+function MeanFZero(y)
+  return MeanFZero()
 end
 
 function MeanFConst(y::Vector{Float64})
   l = 1
   ymin,ymax = extrema(y)
-  h = ymax-ymin #defined as 1 vectors, not scalars
+  h = ymax-ymin 
   LB = Float64[ymin - 0.5h]
   UB = Float64[ymax + 0.5h]
   PLB,x0,PUB = [Float64[q] for q in  quantile(y,[0.1, 0.5 , 0.9]) ]
@@ -313,7 +333,7 @@ end
 #
 #
 # this is the main interface
-
+#=
 """
         gplite_meanfun(meanfun::GPLMeanFun, X , grad)
 
@@ -337,3 +357,4 @@ function gplite_meanfun(meanfun::GPLMeanFun,X::M,grad::G) where
   end
   return out
 end
+=#
